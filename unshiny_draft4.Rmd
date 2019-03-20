@@ -27,7 +27,7 @@ library(ggplot2)
 library(sf)
 library(sp)
 library(spdep)
-library(linkcomm)
+# library(linkcomm)
 library(dismo)
 ```
 
@@ -73,21 +73,9 @@ hwy_tertiary <- st_read(
   st_intersection(gov_b)
 ```
 
-# User Options
-
-```{r}
-params <- list()
-# params$cluster_method <- "louvain"
-params$cluster_method <- "hclust"
-params$user_k <- 40
-params$user_network <- "geographic"
-params$centrality <- "degree"
-```
-
 # Functions
 
 ```{r}
-
 #' Create simple spatial weights matrix based on distance decay.
 #' 
 #' @param sfo is a SF OBJECT. Should be clean (only points of interest).
@@ -197,19 +185,6 @@ fn_cluster <- function(sfo, params){
   # return
   list(sfo=sfo2, lines=w_list$lines)
 }
-
-tmp <- fn_cluster(gov_lp_inclusive, params)
-gov_lp1 <- tmp$sfo
-net_lines <- tmp$lines
-rm(tmp)
-```
-
-```{r quick_map, eval=F}
-ggplot() +
-  geom_sf(data=gov_b) +
-  geom_sf(data=gov_lp1,
-          mapping=aes(color=groups)) +
-  scale_color_discrete(guide=FALSE)
 ```
 
 ```{r}
@@ -222,21 +197,9 @@ fn_polygoner <- function(sfo, boundary){
     st_union(by_feature = T) %>%
     st_intersection(boundary)
 }
-
-cluster_polys <- fn_polygoner(gov_lp1, gov_b)
 ```
 
-# Adjacency
-
-Let's create an adjacency matrix within each cluster. Each edge will be the percent of mayans that those two nodes represent for the cluster (say 1000 mayans, and one town has 10 and another has 100, combined their edge would be 0.11); then multiply that with the percent above mean of distance
-
-
-1/(d_1/d_avg)
-
-edge would be proportional to mayans in cluster, scaled by 
-
 ```{r}
-
 fn_centrality <- function(sfo, params){
   # take data with groups & split by group
   sf_list <- split(sfo, sfo$groups)
@@ -296,22 +259,50 @@ fn_centrality <- function(sfo, params){
       suppressWarnings()
   })
   
+  # centralized_sf <- lapply(centralized_sf, function(x){
+  #   x %>%
+  #   mutate(centrality = ifelse(is.na(centrality), 0, centrality)) %>%
+  #   mutate(centrality_percent = centrality/max(centrality))
+  # })
+  
   centralized_sf <- do.call(rbind, sf_list)
   
+  rn_pal <- colorRampPalette(c("red", "blue"))
   centralized_sf <- centralized_sf %>%
     group_by(groups) %>%
     mutate(centrality = ifelse(is.na(centrality), 0, centrality)) %>%
-    mutate(centrality_percent = centrality/max(centrality))
+    mutate(centrality_percent = centrality / max(centrality)) %>%
+    mutate(centrality_color = rn_pal(10)[as.numeric(cut(centrality_percent,
+    breaks = 10))])
   
   list(lines=lines,
        centralized_sf=centralized_sf
        )  # return
 }
-
-
-tmp <- fn_centrality(gov_lp1, params)
-
 ```
+
+# User Options
+
+```{r}
+params <- list()
+# params$cluster_method <- "louvain"
+params$cluster_method <- "hclust"
+params$user_k <- 70
+params$user_network <- "geographic"
+params$centrality <- "degree"
+```
+
+# Run Functions
+
+```{r}
+cluster_object <- fn_cluster(gov_lp_inclusive, params)
+gov_lp1 <- cluster_object$sfo
+# net_lines <- tmp$lines
+cluster_polys <- fn_polygoner(gov_lp1, gov_b)
+centralities <- fn_centrality(gov_lp1, params)
+centralities$centralized_sf
+```
+
 
 ```{r}
 png(filename="hclust_40.png",
@@ -334,4 +325,35 @@ ggplot() +
 ```
 
 
+
+```{r}
+tmp <- centralities$centralized_sf %>%
+  as("Spatial")
+
+tmp2 <- cluster_polys %>%
+  st_set_geometry(NULL) %>%
+  dplyr::select(cluster_percent_maya)
+
+tmp2
+cluster_polys <- cluster_polys %>%
+  as("Spatial")
+colorRampPalette(c("red", "blue"))(10)
+
+rbPal <- colorRampPalette(c("red", "blue"))
+    # l$cluster_polys <- l$cluster_polys %>%
+    #   mutate(color = rbPal(10)[as.numeric(cut(
+    #       cluster_polys$cluster_percent_maya,
+    #       breaks = 10)
+    #   )])
+    
+cluster_polys$color <- rbPal(10)[as.numeric(
+  cut(
+    cluster_polys$cluster_percent_maya,
+    breaks = 10)
+)
+]
+cluster_polys$color[1]
+
+centralities$centralized_sf
+```
 

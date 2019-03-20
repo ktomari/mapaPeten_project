@@ -1,50 +1,49 @@
 library(dplyr)
+library(igraph)
 library(tidygraph)
 library(ggplot2)
 library(sf)
 library(sp)
 library(spdep)
-library(linkcomm)
+# library(linkcomm)
 library(dismo)
 
 # DATA ----
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-gov_lp_inclusive <- st_read(
+spatials <- list()
+
+spatials$gov_lp_inclusive <- st_read(
   dsn="acdip_pop_project.gpkg",
   layer="gov_lp_inclusive"
 )
 
-gov_b <- st_read(
+spatials$gov_b <- st_read(
   dsn="acdip_pop_project.gpkg",
   layer="gov_b"
 )
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # bounding box
-bbox <- st_bbox(gov_b)
+spatials$bbox <- st_bbox(spatials$gov_b)
 
 # bounding box to polygon
-peten_extent <- bbox %>%
+spatials$peten_extent <- spatials$bbox %>%
   st_as_sfc() %>%
   st_cast(to="POLYGON")
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # highways
-hwy_primary <- st_read(
-  dsn="acdip_pop_project.gpkg",
-  layer="osm_hwy_primary"
-) %>%
-  st_intersection(gov_b)
-hwy_secondary <- st_read(
-  dsn="acdip_pop_project.gpkg",
-  layer="osm_hwy_secondary"
-) %>%
-  st_intersection(gov_b)
-hwy_tertiary <- st_read(
-  dsn="acdip_pop_project.gpkg",
-  layer="osm_hwy_tertiary"
-) %>%
-  st_intersection(gov_b)
+spatials$hwy_primary <- st_read(dsn = "acdip_pop_project.gpkg",
+                                layer = "osm_hwy_primary") %>%
+  st_intersection(spatials$gov_b)
+
+spatials$hwy_secondary <- st_read(dsn = "acdip_pop_project.gpkg",
+                                  layer = "osm_hwy_secondary") %>%
+  st_intersection(spatials$gov_b)
+
+spatials$hwy_tertiary <- st_read(dsn = "acdip_pop_project.gpkg",
+                                 layer = "osm_hwy_tertiary") %>%
+  st_intersection(spatials$gov_b)
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #' Create simple spatial weights matrix based on distance decay.
@@ -227,10 +226,13 @@ fn_centrality <- function(sfo, params){
   
   centralized_sf <- do.call(rbind, sf_list)
   
+  rn_pal <- colorRampPalette(c("black", "white"))
   centralized_sf <- centralized_sf %>%
     group_by(groups) %>%
     mutate(centrality = ifelse(is.na(centrality), 0, centrality)) %>%
-    mutate(centrality_percent = centrality/max(centrality))
+    mutate(centrality_percent = centrality / max(centrality)) %>%
+    mutate(centrality_color = rn_pal(10)[as.numeric(cut(centrality_percent,
+                                                        breaks = 10))])
   
   list(lines=lines,
        centralized_sf=centralized_sf
