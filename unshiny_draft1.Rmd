@@ -1,0 +1,285 @@
+---
+title: "unshiny_draft1"
+author: "Kenji Tomari"
+date: "3/18/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Libraries
+
+```{r}
+library(dplyr)
+library(sf)
+library(sp)
+library(spdep)
+library(linkcomm)
+library(dismo)
+```
+
+# Data
+
+```{r}
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+gov_lp_inclusive <- st_read(
+  dsn="acdip_pop_project.gpkg",
+  layer="gov_lp_inclusive"
+)
+
+gov_b <- st_read(
+  dsn="acdip_pop_project.gpkg",
+  layer="gov_b"
+)
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# bounding box
+bbox <- st_bbox(gov_b)
+
+# bounding box to polygon
+peten_extent <- bbox %>%
+  st_as_sfc() %>%
+  st_cast(to="POLYGON")
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# highways
+hwy_primary <- st_read(
+  dsn="acdip_pop_project.gpkg",
+  layer="osm_hwy_primary"
+) %>%
+  st_intersection(gov_b)
+hwy_secondary <- st_read(
+  dsn="acdip_pop_project.gpkg",
+  layer="osm_hwy_secondary"
+) %>%
+  st_intersection(gov_b)
+hwy_tertiary <- st_read(
+  dsn="acdip_pop_project.gpkg",
+  layer="osm_hwy_tertiary"
+) %>%
+  st_intersection(gov_b)
+```
+
+# User Choices
+
+```{r}
+# user_cluster <- "hiearchical_clustering"
+user_k <- 0.9
+user_dist <- 5000 # meters
+user_centrality <- "degree"
+```
+
+# Functions
+
+```{r}
+
+#' Create simple spatial weights matrix based on distance decay.
+#' 
+#' @param sfo is a SF OBJECT. Should be clean (only points of interest).
+#' @param id_column is CHARACTER - name of the ID column in sfo.
+#' @param radius is NUMERIC - the radius of the neighborhood.
+fn_weights_matrix <- function(sfo, 
+                              id_column, 
+                              radius=5000){
+  # Convert to SP object.
+  spo <- sfo %>%
+    as("Spatial")
+  
+  # Create nb object.
+  nbdist <- spo %>%
+    sp::coordinates() %>%
+    spdep::dnearneigh(d1 = 1,
+                      d2 = radius,
+                      row.names = spo@data[[id_column]]) %>%
+    spdep::nbdists(coords = sp::coordinates(spo)) 
+  
+  # Distance Decay
+  nbdist <- lapply(nbdist, function(x) {
+    if (is.null(x))
+      return(NULL)
+    else
+      1 / x
+  })
+
+  # Create Spatial Weights listw
+  w <- spo %>%
+    sp::coordinates() %>%
+    spdep::dnearneigh(d1 = 1,
+                      d2 = radius,
+                      row.names = spo@data[[id_column]]) %>%
+    spdep::nb2listw(glist = nbdist,  # general weights
+                    style = "W",
+                    zero.policy = T)
+  
+
+  lines <- w %>%
+    listw2lines(coords=sp::coordinates(spo), 
+                proj4string = CRS(proj4string(spo))) %>%
+    st_as_sf()
+
+  
+  # Convert to Matrix.
+  mat <- spdep::listw2mat(w)
+  # mat <- spdep::nb2mat(nbdist)
+  
+  # add names
+  colnames(mat) <- rownames(mat)
+  
+  # return
+  list(mat=mat, lines=lines)
+}
+```
+
+# Step-By-Step Algorithm
+
+```{r}
+# create clean point data
+gov_lp1 <- gov_lp_inclusive %>%
+  filter(POBTOT.y > 0)
+
+# create spatial weights matrix
+w_out <- fn_weights_matrix(gov_lp1, id_column="cod_censo", radius=5000)
+
+# create adjacency matrix
+adj_mat <- w_out$mat %>%
+  graph.adjacency(mode="directed", weighted=T) %>%
+  as_tbl_graph() 
+
+# Create lookup table for cod_censo & row number
+names <- adj_mat %>%
+  activate(nodes) %>%
+  as_tibble() %>%
+  mutate(row_id = as.numeric(rownames(.))) %>%
+  dplyr::select(row_id, name)
+```
+
+## Create Polylines for Edges
+
+```{r}
+# create lines
+lines_lp <- w_out$lines
+```
+
+
+## Create Clusters
+
+```{r}
+# Create object to send to getLinkCommunities
+lco <- adj_mat %>%
+  activate(nodes) %>%
+  filter(!node_is_isolated()) %>%
+  activate(edges) %>%
+  as_tibble() %>%
+  as.data.frame()
+
+# Create clusters
+lco <- getLinkCommunities(lco, 
+                          # directed=T, 
+                          # dirweight = 0.5, 
+                          plot=F, 
+                          verbose=F)
+
+# convert to data.frame
+lco_df <- lapply(seq_along(lco$clusters), function(i){
+  data.frame(first_cluster=rep(i, length(lco$clusters[[i]])),
+             row_id=lco$clusters[[i]]
+  )
+})
+
+lco_df <- do.call(rbind, lco_df)
+
+```
+
+```{r}
+user_k <- 0.7  # TODO del
+
+# now cut tree
+cluster_relatedness <- getClusterRelatedness(lco, 
+                                             cutat=user_k, 
+                                             plot=F, 
+                                             verbose=F)
+
+# Convert to Data.frame
+clust_rel_df <- lapply(seq_along(cluster_relatedness), function(i){
+  data.frame(meta_cluster=rep(i, length(cluster_relatedness[[i]])),
+             first_cluster=cluster_relatedness[[i]]
+             )
+})
+
+clust_rel_df <- do.call(rbind, clust_rel_df)  # bind all df
+
+clust_rel_df %>%
+  arrange(first_cluster)
+
+cluster_df <- lco_df %>%
+  left_join(clust_rel_df, by="first_cluster")
+
+# Simple df for joining with gov_lp
+cluster_df <- cluster_df %>%
+  arrange(row_id) %>%
+  left_join(names, by="row_id") %>%
+  mutate(cod_censo = name) %>%
+  dplyr::select(cod_censo, first_cluster, meta_cluster)
+
+# Add clusters to sf object
+gov_lp1 <- gov_lp1 %>%
+  left_join(cluster_df, by="cod_censo")
+```
+
+```{r eval=F}
+# Geometries with sf
+tmp <- gov_lp1 %>%
+  st_union %>%
+  st_voronoi(envelope=peten_extent) %>%
+  st_cast() %>%
+  st_intersection(gov_b)
+```
+
+## Voronoi Geometries
+
+```{r}
+# Geometries using dismo (bc st_voronoi merges layers)
+lp_voronoi <- gov_lp1 %>%
+  as("Spatial")
+
+# make a voronoi
+lp_voronoi <- lp_voronoi %>%
+  voronoi(ext = extent(as(peten_extent, "Spatial"))) %>%
+  st_as_sf() %>%
+  st_intersection(gov_b)
+
+# merge cluster voronois
+lp_voronoi <- lp_voronoi %>%
+  group_by(meta_cluster) %>%
+  summarize(cluster_percent_maya = sum(PEMAYA)/sum(POBTOT.y), do_union=T) %>%
+  st_cast()
+
+# lp_voronoi <- lp_voronoi %>%
+#   mutate(cluster_percent_maya = ifelse(is.na(meta_cluster),
+#                                        NA, 
+#                                        cluster_percent_maya))
+
+lp_voronoi <- lp_voronoi %>%
+  filter(!is.na(meta_cluster))
+
+```
+
+```{r eval=F}
+png(filename="unshiny_test.png",
+    width=1000,
+    height=800)
+ggplot()+
+  geom_sf(data=lp_voronoi,
+          mapping=aes(alpha=cluster_percent_maya),
+          fill="purple",
+          lwd=0.1) +
+  scale_alpha_continuous() + 
+  geom_sf(data=lines_lp, color="red") +
+  geom_sf(data=gov_lp1,
+          cex=1)
+```
+
+
+

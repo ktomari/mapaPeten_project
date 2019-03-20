@@ -1,0 +1,151 @@
+---
+title: "presentation_maps"
+author: "Kenji Tomari"
+date: "3/12/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# libraries
+
+```{r}
+library(sf)
+library(tidyverse)
+```
+
+
+# data
+
+```{r}
+gov_lp_inclusive <- st_read(
+  dsn="acdip_pop_project.gpkg",
+  layer="gov_lp_inclusive"
+)
+gov_b <- st_read(
+  dsn="acdip_pop_project.gpkg",
+  layer="gov_b"
+)
+hwy_primary <- st_read(
+  dsn="acdip_pop_project.gpkg",
+  layer="osm_hwy_primary"
+) %>%
+  st_intersection(gov_b)
+hwy_secondary <- st_read(
+  dsn="acdip_pop_project.gpkg",
+  layer="osm_hwy_secondary"
+) %>%
+  st_intersection(gov_b)
+hwy_tertiary <- st_read(
+  dsn="acdip_pop_project.gpkg",
+  layer="osm_hwy_tertiary"
+) %>%
+  st_intersection(gov_b)
+
+# bounding box
+bbox <- st_bbox(gov_b)
+
+# bounding box to polygon
+peten_extent <- bbox %>%
+  st_as_sfc() %>%
+  st_cast(to="POINT")
+```
+
+# maps
+
+## INE: All Data
+
+```{r eval=F}
+png(filename="pres_all_gov_lp.png",
+    width=1000,
+    height=800)
+ggplot() +
+  geom_sf(data=gov_b,
+          lwd=0) +
+  geom_sf(data=gov_lp_inclusive,
+          mapping=aes(color=categoria),
+          size=2) +
+  theme_bw()
+  # ggtitle("Map of All Census Places")
+```
+
+## INE: Pop Data
+
+```{r eval=F}
+tmp <- gov_lp_inclusive %>%
+  filter(POBTOT.y > 0)
+png(filename="pres_pop_gov_lp.png",
+    width=1000,
+    height=800)
+ggplot() +
+  geom_sf(data=gov_b,
+          lwd=0) +
+  geom_sf(data=tmp,
+          mapping=aes(color=categoria),
+          size=2) +
+  theme_bw()
+  # ggtitle("Map of Census Places with Population")
+rm(tmp)
+```
+
+## INE: Pop Data Log Scaled & Colored
+
+```{r}
+tmp <- gov_lp_inclusive %>%
+  filter(POBTOT.y > 0 & !is.na(POBTOT.y)) %>%
+  mutate(POBTOT.y = cut(log(POBTOT.y), 9, include.lowest=T, dig.lab=1))
+
+png(filename="pres_pop_log_gov_lp.png",
+    width=1000,
+    height=800)
+ggplot() +
+  geom_sf(data=gov_b,
+          lwd=0) +
+  geom_sf(data=hwy_primary, col="#0000ff") +
+  geom_sf(data=hwy_secondary, col="#3333cc") +
+  geom_sf(data=hwy_tertiary, col="#cc00ff") +
+  geom_sf(data=tmp,
+          mapping=aes(color=POBTOT.y),
+          size=4) +
+  scale_color_brewer(palette="OrRd") +
+  theme_bw()
+  # ggtitle("Map of Census Places with Population")
+rm(tmp)
+```
+
+## INE: Percent Mayan Voronoi
+
+```{r eval=F}
+# make a voronoi
+lp_voronoi <- gov_lp_inclusive %>%
+  filter(POBTOT.y > 0 & !is.na(POBTOT.y)) %>%
+  as("Spatial") %>%
+  voronoi(
+  ext = extent(as(peten_extent, "Spatial"))) %>%
+  st_as_sf() %>%
+  st_intersection(gov_b)
+
+```
+
+```{r eval=F}
+tmp <- lp_voronoi %>%
+  mutate(PercentMaya = cut(PercentMaya, 9, include.lowest=F, dig.lab=1))
+
+png(filename="pres_PercentMayan_gov_lp.png",
+    width=1000,
+    height=800)
+ggplot() +
+  geom_sf(data=gov_b) +
+  geom_sf(data=tmp,
+          mapping=aes(fill=PercentMaya),
+          lwd=0) +
+  scale_fill_brewer(palette="OrRd") +
+  geom_sf(data=hwy_primary, col="#0000ff") +
+  geom_sf(data=hwy_secondary, col="#3333cc") +
+  geom_sf(data=hwy_tertiary, col="#cc00ff") +
+  theme_bw()
+  # ggtitle("Map of Census Places with Population")
+rm(tmp)
+```

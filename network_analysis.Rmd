@@ -1,0 +1,436 @@
+---
+title: "network_analysis"
+author: "Kenji Tomari"
+date: "3/15/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Libraries
+
+```{r}
+library(sf)
+library(tidyverse)
+library(tidygraph)
+library(ggraph)
+library(igraph)
+library(sp)
+library(spdep)
+library(rlang)
+library(DT)
+```
+
+
+# Data
+
+```{r}
+gov_lp_inclusive <- st_read(
+  dsn="acdip_pop_project.gpkg",
+  layer="gov_lp_inclusive"
+)
+
+gov_b <- st_read(
+  dsn="acdip_pop_project.gpkg",
+  layer="gov_b"
+)
+
+# bounding box
+bbox <- st_bbox(gov_b)
+
+# bounding box to polygon
+peten_extent <- bbox %>%
+  st_as_sfc() %>%
+  st_cast(to="POLYGON")
+
+# unpopulated data
+gov_lp_popless <- gov_lp_inclusive %>%
+  filter(POBTOT.y == 0)
+
+# populated data
+gov_lp_pop <- gov_lp_inclusive %>%
+  filter(POBTOT.y > 0)
+
+# populated data
+gov_lp_popped <- gov_lp_pop %>%
+  as("Spatial")
+```
+
+```{r}
+hwy_primary <- st_read(
+  dsn="acdip_pop_project.gpkg",
+  layer="osm_hwy_primary"
+) %>%
+  st_intersection(gov_b)
+hwy_secondary <- st_read(
+  dsn="acdip_pop_project.gpkg",
+  layer="osm_hwy_secondary"
+) %>%
+  st_intersection(gov_b)
+hwy_tertiary <- st_read(
+  dsn="acdip_pop_project.gpkg",
+  layer="osm_hwy_tertiary"
+) %>%
+  st_intersection(gov_b)
+```
+
+# Basic Network on Space
+
+```{r}
+
+radius <- 5000  # in meters
+
+nbdist_out <- gov_lp_popped %>%
+  sp::coordinates() %>%
+  spdep::dnearneigh(d1 = 1,
+                    d2 = radius,
+                    # 10km
+                    row.names = gov_lp_popped@data$cod_censo) %>%
+  spdep::nbdists(coords = sp::coordinates(gov_lp_popped))
+
+# Distance Decay
+nbdist_out <- lapply(nbdist_out, function(x) {
+  if (is.null(x))
+    return(NULL)
+  else
+    1 / x
+})
+
+w <- gov_lp_popped %>%
+  sp::coordinates() %>%
+  spdep::dnearneigh(d1 = 1,
+                    d2 = radius,
+                    row.names = gov_lp_popped@data$cod_censo) %>%
+  spdep::nb2listw(glist = nbdist_out,  # general weights
+                  style = "W",
+                  zero.policy = T)
+
+mat <- listw2mat(w)
+colnames(mat) <- rownames(mat)
+head(as.data.frame(mat))
+
+# create lines
+# listw2lines(w, coords=sp::coordinates(gov_lp_popped))
+```
+
+# Mapping Network Lines
+
+```{r}
+#' Create an sf object of linestrings from weights matrix. Unique ID is called
+#' cod_censo in this function. You could add summarize(m = mean(POBTOT.y))
+#'
+#' @param sfp is an sf object of points
+#' @param mat is an object returned from listw2mat
+fn_sf_networker <- function(sfp, mat){
+  # extract meaningful relationships (i.e. non-zero)
+  rels <- lapply(seq_len(nrow(mat)), function(i){
+    mat[i, which(mat[i,]!=0)]
+  })
+  names(rels) <- rownames(mat)  # give list elements names.
+  
+  # create geometries
+  geo <- lapply(seq_along(rels), function(x){
+    # apply across vector (x)
+    tmp <- lapply(seq_along(rels[[x]]), function(y){
+      sfp %>%
+        filter(
+          cod_censo %in% c(names(rels)[x],  # point 1
+                           names(rels[[x]])[y])  # point 2
+        ) %>%
+        summarize() %>%
+        st_cast(to="LINESTRING")
+    })
+    
+    # add weight value to each line
+    tmp <- lapply(seq_along(tmp), function(y){
+      tmp[[y]] %>%
+        mutate(weight=rels[[x]][y]) %>%
+        mutate(origin=names(rels)[x])
+    })
+    
+    # rbind all lines related to this village
+    do.call(rbind, tmp)
+  })
+  
+  geo
+}
+
+tmp <- fn_sf_networker(gov_lp_inclusive, mat)
+```
+
+```{r}
+fn_remove_duplicate_geo <- function(sfl){
+  sfl %>%
+    do.call(rbind, .) %>%
+    dplyr::select(geom) %>%
+    unique()
+}
+
+network_paths <- fn_remove_duplicate_geo(tmp)
+rm(tmp)
+```
+
+
+```{r eval=F}
+png(filename="map_neighbors_by_5km.png",
+    width=1000,
+    height=800)
+ggplot() +
+  geom_sf(data=gov_b)+
+  geom_sf(data=hwy_primary, col="#000000") +
+  geom_sf(data=hwy_secondary, col="#000000") +
+  geom_sf(data=hwy_tertiary, col="#000000") +
+  geom_sf(data=network_paths,
+          color="red",
+          lwd=0.2) +
+  ggtitle("Map of Neighbors by 5km")
+```
+
+![](map_neighbors_by_5km.png)
+
+# Create Adjacency Matrix for Network Analysis
+
+```{r}
+ad_mat <- mat %>%
+  graph.adjacency( mode="directed", weighted=T) %>%
+  as_tbl_graph()
+
+ad_mat %>%
+  activate(edges) %>%
+  as_tibble()
+
+ad_mat %>%
+  activate(nodes) %>%
+  as_tibble() %>%
+  mutate(node_id = rownames(.)) %>%
+  dplyr::select(node_id, name)
+```
+
+
+```{r}
+ad_mat %>%
+  activate(nodes) %>%
+  filter(!node_is_isolated()) %>%
+  ggraph() +
+  geom_edge_link() + 
+  geom_node_point() + 
+  theme_graph()
+```
+
+# Betweenness
+
+Not actually that interesting to look at. May be something to include later after we decide what clusters are.
+
+```{r eval=F}
+# Betweeness
+ad_mat %>%
+  activate(nodes) %>%
+  filter(!node_is_isolated()) %>%
+  mutate(basic_betweeness = as.factor(cut(centrality_betweenness(), breaks=5))) %>%
+  ggraph() +
+  geom_edge_link() + 
+  geom_node_point(aes(color=basic_betweeness)) + 
+  theme_graph()
+```
+
+```{r eval=F}
+# Betweeness
+mat_between <- ad_mat %>%
+  activate(nodes) %>%
+  filter(!node_is_isolated()) %>%
+  mutate(basic_betweeness = as.factor(cut(centrality_betweenness(), breaks=5)))
+
+gov_lp_centrals <- gov_lp_pop %>%
+  left_join(as_tibble(mat_between), by=c("cod_censo"="name"))
+```
+
+```{r eval=F}
+png(filename="map_betweeness.png",
+    width=1000,
+    height=800)
+ggplot() +
+  geom_sf(data=gov_b)+
+  geom_sf(data=hwy_primary, col="#000000") +
+  geom_sf(data=hwy_secondary, col="#000000") +
+  geom_sf(data=hwy_tertiary, col="#000000") +
+  geom_sf(data=network_paths,
+          color="red",
+          lwd=0.2) +
+  geom_sf(data=gov_lp_centrals,
+          mapping=aes(color=basic_betweeness)) +
+  scale_color_brewer(palette="PuRd", na.value="black") +
+  ggtitle("Map of Betweeness Nodes by 5km")
+```
+
+![](map_betweeness.png)
+
+# Cluster
+
+```{r}
+mat_infomap <- ad_mat %>%
+  activate(nodes) %>%
+  filter(!node_is_isolated()) %>%
+  mutate(infomap_groups = as.factor(group_infomap()))
+
+gov_lp_clusters <- gov_lp_pop %>%
+  left_join(as_tibble(mat_infomap), by=c("cod_censo"="name"))
+
+cluster_polys <- cluster_points <- gov_lp_clusters %>%
+  drop_na(infomap_groups)
+
+# gov_lp_clusters %>%
+#   st_set_geometry(NULL) %>%
+#   head()
+
+# cluster_polys[[1]]
+```
+
+```{r}
+# create polygons out of each group
+cluster_polys <- split(cluster_polys,
+                       f=cluster_polys$infomap_groups)
+
+# # st buffer method
+# cluster_polys <- lapply(cluster_polys, function(x){
+# 
+#   tmp <- x %>%
+#     st_buffer(dist=5000) %>%
+#     st_union()
+# 
+#   tmp2 <-  x %>%
+#     summarize(group_percent_maya=sum(PEMAYA)/sum(POBTOT.y),
+#               grupo=first(infomap_groups)) %>%
+#     st_set_geometry(NULL)
+# 
+#   tmp <- cbind(tmp, tmp2)
+# 
+# 
+#   st_sf(tmp)
+# 
+# })
+
+cluster_polys <- lapply(cluster_polys, function(x){
+  
+  if(nrow(x) > 2){
+    x %>%
+      summarize(group_percent_maya=sum(PEMAYA)/sum(POBTOT.y),
+                grupo=first(infomap_groups)) %>%
+      st_cast(to="POLYGON")
+  } else if(nrow(x) == 2){
+    x %>%
+      summarize(group_percent_maya=sum(PEMAYA)/sum(POBTOT.y),
+                grupo=first(infomap_groups)) %>%
+      st_cast(to="LINESTRING") %>%
+      st_buffer(dist=1000)
+  }
+  # x %>%
+  #   summarize(group_percent_maya=sum(PEMAYA)/sum(POBTOT.y),
+  #             grupo=first(infomap_groups)) %>%
+  #   st_buffer(dist=radius) %>%
+  #   st_union
+
+  
+})
+
+cluster_polys <- do.call(rbind, cluster_polys)
+
+cluster_polys %>%
+  st_set_geometry(NULL) %>%
+  head()
+
+```
+
+```{r}
+# tmp <- cluster_polys[[1]] %>%
+#   st_buffer(dist=radius) %>%
+#   st_union()
+
+# tmp <- lapply(cluster_polys, function(x){
+#   x %>%
+#     st_buffer(dist=radius) %>%
+#     st_union()
+# })
+
+tmp <- lapply(cluster_polys, function(x){
+
+  tmp <- x %>%
+    st_buffer(dist=5000) %>%
+    st_union()
+
+  tmp2 <-  x %>%
+    summarize(group_percent_maya=sum(PEMAYA)/sum(POBTOT.y),
+              grupo=first(infomap_groups)) %>%
+    st_set_geometry(NULL)
+
+  tmp <- cbind(tmp, tmp2)
+
+
+  st_sf(tmp)
+
+})
+
+
+tmp2 <- do.call(rbind, tmp)
+
+tmp3 <- tmp2 %>%
+  st_union()
+
+tmp4 <- cluster_points %>%
+  st_union() %>%
+  st_voronoi(envelope=peten_extent)
+
+# tmp5 <- tmp3 %>%
+#   st_intersection(tmp4)
+
+# cluster_points %>%
+#   st_set_geometry(NULL) %>%
+#   head()
+
+ggplot() +
+  geom_sf(data=gov_b)+
+  geom_sf(data=tmp5,
+          fill=NA)
+```
+
+```{r}
+m = rbind(c(0,0), c(1,0), c(1,1), c(0,1), c(0,0))
+p = st_polygon(list(m))
+n = 100
+l = vector("list", n)
+for (i in 1:n)
+  l[[i]] = p + 10 * runif(2)
+s = st_sfc(l)
+
+rm(s, m, p, n, l)
+```
+
+
+```{r eval=F}
+png(filename="map_clusters_infomap.png",
+    width=1000,
+    height=800)
+ggplot() +
+  geom_sf(data=gov_b)+
+  geom_sf(data=hwy_primary, col="#000000") +
+  geom_sf(data=hwy_secondary, col="#000000") +
+  geom_sf(data=hwy_tertiary, col="#000000") +
+  geom_sf(data=network_paths,
+          color="red",
+          lwd=0.2) +
+  geom_sf(data=cluster_polys,
+          mapping=aes(fill=group_percent_maya,
+          color=grupo)) +
+  scale_fill_gradient2(
+    midpoint = 0.5,
+    low = "#8856a7",
+    mid = "#e7e1ef",
+    high = "#c51b8a"
+    # aesthetics = "group_percent_maya"
+  ) +
+  # scale_fill_brewer(palette="OrRd", type="seq", ) +
+  # geom_sf(data=gov_lp_clusters) +
+  # scale_color_discrete(na.value="black") +
+  ggtitle("Map of Betweeness Nodes by 5km")
+```

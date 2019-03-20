@@ -1,0 +1,246 @@
+---
+title: "LISA"
+author: "Kenji Tomari"
+date: "3/5/2019"
+output:
+  html_document:
+    theme: journal
+    toc: yes
+    toc_depth: '2'
+    toc_float: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Libraries
+
+```{r}
+library(tidyverse)
+library(sf)
+library(sp)
+library(spdep)
+library(dismo)
+```
+
+# Data
+
+```{r}
+gov_lp_inclusive <- st_read(
+  dsn="acdip_pop_project.gpkg",
+  layer="gov_lp_inclusive"
+)
+
+gov_b <- st_read(
+  dsn="acdip_pop_project.gpkg",
+  layer="gov_b"
+)
+
+# bounding box
+bbox <- st_bbox(gov_b)
+
+# bounding box to polygon
+peten_extent <- bbox %>%
+  st_as_sfc() %>%
+  st_cast(to="POINT")
+
+lp_control_points <- gov_lp_inclusive %>%
+  filter(POBTOT.y > 0) %>%
+  mutate(POBTOT.y = log(POBTOT.y))
+
+lp_sp <- as(lp_control_points, "Spatial")
+```
+
+```{r}
+hwy_primary <- st_read(
+  dsn="acdip_pop_project.gpkg",
+  layer="osm_hwy_primary"
+) %>%
+  st_intersection(gov_b)
+hwy_secondary <- st_read(
+  dsn="acdip_pop_project.gpkg",
+  layer="osm_hwy_secondary"
+) %>%
+  st_intersection(gov_b)
+hwy_tertiary <- st_read(
+  dsn="acdip_pop_project.gpkg",
+  layer="osm_hwy_tertiary"
+) %>%
+  st_intersection(gov_b)
+```
+
+# Simple LISA for Population
+
+## Distance Decay 
+
+```{r}
+nbdist_out <- lp_sp %>%
+  sp::coordinates() %>%
+  spdep::dnearneigh(d1 = 1,
+                    d2 = 5000,
+                    # 5km
+                    row.names = lp_sp@data$cod_censo) %>%
+  spdep::nbdists(coords = sp::coordinates(lp_sp))
+
+# Distance Decay
+nbdist_out <- lapply(nbdist_out, function(x) {
+  if (is.null(x))
+    return(NULL)
+  else
+    1 / x
+})
+
+w <- lp_sp %>%
+  sp::coordinates() %>%
+  spdep::dnearneigh(d1 = 1,
+                    d2 = 5000,
+                    row.names = lp_sp@data$cod_censo) %>%
+  spdep::nb2listw(glist = nbdist_out,
+                  style = "W",
+                  zero.policy = T)
+
+print(w, zero.policy=T)
+```
+
+## Global Moran's I
+
+```{r}
+mi <- moran.mc(lp_sp$POBTOT.y, 
+         w, 
+         nsim=999,
+         zero.policy = T)
+mi
+```
+
+## Local Moran's I
+
+```{r}
+locali <- spdep::localmoran(lp_sp$POBTOT.y, w)
+
+summary(locali)
+
+lp_control_points <-
+  mutate(lp_control_points, 
+         localmi = locali[,1],  # local moran's I
+         localz = locali[,4])  # local z score
+
+lp_control_points %>%
+  st_set_geometry(NULL) %>%
+  head()
+```
+
+```{r}
+# create a 9 level z-score for population
+lp_voronoi <- lp_control_points %>%
+  mutate(localz = cut(localz, 9, include.lowest=T)) %>%
+  as("Spatial")
+
+# make a voronoi
+lp_voronoi <- voronoi(
+  lp_voronoi,
+  ext = extent(as(peten_extent, "Spatial"))) %>%
+  st_as_sf() %>%
+  st_intersection(gov_b)
+
+```
+
+## Quick Map
+
+```{r eval=F}
+# get just points localz (not necessary if you dont need to color points)
+tmp2 <- lp_control_points %>%
+  mutate(localz = cut(localz, 9, include.lowest=T))
+
+# creat png
+png(filename="quick_map_of_simple_LISA.png",
+    width=1000,
+    height=800)
+ggplot() +
+  geom_sf(data=lp_voronoi,
+          aes(fill=localz),
+          color=NA) +
+  scale_fill_brewer(palette="OrRd")+
+  geom_sf(data=hwy_primary, col="#0000ff") +
+  geom_sf(data=hwy_secondary, col="#3333cc") +
+  geom_sf(data=hwy_tertiary, col="#cc00ff") +
+  geom_sf(data=tmp2,
+          size=1,
+          color="black") +
+  geom_sf(data=gov_b,
+          fill=NA) +
+  theme_bw()
+  # ggtitle("Simple LISA (by logscale pop)")
+rm(tmp2)
+```
+
+![](quick_map_of_simple_LISA.png)
+
+# LISA of Mayan Populations
+
+## Global Moran's I
+
+```{r}
+mi <- moran.mc(lp_sp$PercentMaya, 
+         w, 
+         nsim=999,
+         zero.policy = T)
+mi
+```
+
+```{r}
+locali <- spdep::localmoran(lp_sp$PercentMaya, w)
+
+lp_control_points <-
+  mutate(lp_control_points, 
+         localmi = locali[,1],  # local moran's I
+         localz = locali[,4])  # local z score
+
+lp_control_points %>%
+  st_set_geometry(NULL) %>%
+  head()
+```
+
+```{r}
+# create a 9 level z-score for population
+lp_voronoi <- lp_control_points %>%
+  mutate(localz = cut(localz, 9, include.lowest=T)) %>%
+  as("Spatial")
+
+# make a voronoi
+lp_voronoi <- voronoi(
+  lp_voronoi,
+  ext = extent(as(peten_extent, "Spatial"))) %>%
+  st_as_sf() %>%
+  st_intersection(gov_b)
+
+```
+
+## Quick Map
+
+```{r eval=F}
+# get just points localz (not necessary if you dont need to color points)
+tmp2 <- lp_control_points %>%
+  mutate(localz = cut(localz, 9, include.lowest=T))
+
+# creat png
+png(filename="quick_map_of_Mayan_LISA.png",
+    width=1000,
+    height=800)
+ggplot() +
+  geom_sf(data=lp_voronoi,
+          aes(fill=localz),
+          color=NA) +
+  scale_fill_brewer(palette="OrRd")+
+  geom_sf(data=hwy_primary, col="#0000ff") +
+  geom_sf(data=hwy_secondary, col="#3333cc") +
+  geom_sf(data=hwy_tertiary, col="#cc00ff") +
+  geom_sf(data=tmp2,
+          size=1,
+          color="black") +
+  geom_sf(data=gov_b,
+          fill=NA) +
+  theme_bw()
+  # ggtitle("Simple LISA (by logscale pop)")
+rm(tmp2)
+```

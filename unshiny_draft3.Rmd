@@ -1,0 +1,200 @@
+---
+title: "unshiny_draft3"
+author: "Kenji Tomari"
+date: "3/18/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Libraries
+
+```{r}
+library(dplyr)
+library(sf)
+library(sp)
+library(spdep)
+library(linkcomm)
+library(dismo)
+```
+
+# Data
+
+```{r}
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+gov_lp_inclusive <- st_read(
+  dsn="acdip_pop_project.gpkg",
+  layer="gov_lp_inclusive"
+)
+
+gov_b <- st_read(
+  dsn="acdip_pop_project.gpkg",
+  layer="gov_b"
+)
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# bounding box
+bbox <- st_bbox(gov_b)
+
+# bounding box to polygon
+peten_extent <- bbox %>%
+  st_as_sfc() %>%
+  st_cast(to="POLYGON")
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# highways
+hwy_primary <- st_read(
+  dsn="acdip_pop_project.gpkg",
+  layer="osm_hwy_primary"
+) %>%
+  st_intersection(gov_b)
+hwy_secondary <- st_read(
+  dsn="acdip_pop_project.gpkg",
+  layer="osm_hwy_secondary"
+) %>%
+  st_intersection(gov_b)
+hwy_tertiary <- st_read(
+  dsn="acdip_pop_project.gpkg",
+  layer="osm_hwy_tertiary"
+) %>%
+  st_intersection(gov_b)
+```
+
+# User Choices
+
+```{r eval=F}
+# user_cluster <- "hiearchical_clustering"
+user_k <- 40
+user_dist <- 5000 # meters
+user_centrality <- "degree"
+```
+
+# Unsupervised Clusters
+
+```{r}
+# remove empty pops, subset percentmayan
+gov_lp_subset <- gov_lp_inclusive %>%
+  filter(POBTOT.y > 0 & !is.na(POBTOT.y))
+
+# make sp
+gov_lp_subset_sp <- as(gov_lp_subset, "Spatial")
+
+# create distance matrix
+matrix_of_dist1 <- dist(gov_lp_subset_sp@coords)
+
+clusters <- hclust(matrix_of_dist1)  # just geographic
+```
+
+```{r}
+gov_lp_subset <- gov_lp_subset %>%
+  mutate(
+    hclust = cutree(clusters, user_k)
+    )
+```
+
+# Voronoi
+
+```{r eval=F}
+# Geometries using dismo (bc st_voronoi merges layers)
+vor <- gov_lp1 %>%
+  as("Spatial")
+
+# make a voronoi
+vor <- vor %>%
+  voronoi(ext = extent(as(peten_extent, "Spatial"))) %>%
+  st_as_sf() %>%
+  st_intersection(gov_b)
+
+# merge cluster voronois
+vor <- vor %>%
+  group_by(groups) %>%
+  summarize(group_percent_maya = sum(PEMAYA)/sum(POBTOT.y), 
+            do_union=T) %>%
+  st_cast()
+
+vor2 <- split(vor, vor$groups)
+tmp <- lapply(vor2, function(x){
+  permaya <- x %>%
+    summarize(group_percent_maya = sum(PEMAYA)/sum(POBTOT.y))
+  
+  if(nrow(x)==1){
+    x <- x %>%
+      st_geometry() %>%
+      st_cast() %>%
+      st_sf() %>%
+      mutate(pmaya = permaya$group_percent_maya)
+  }
+  # snap all rows in x
+  for(i in seq_len(nrow(x))){
+    if(i == 1){
+      tmp <- x[i,]
+    } else {
+      tmp <- tmp %>%
+        st_snap(x[1,], tolerance=1000)
+    }
+  }  # end for loop
+  tmp %>%
+    st_union() %>%
+    st_cast() %>%
+    st_sf() %>%
+    mutate(pmaya = permaya$group_percent_maya)
+})
+
+# vor <- vor %>%
+#   filter(!is.na(groups))
+
+# return
+vor
+
+tmp <- do.call(rbind, tmp)
+```
+
+```{r eval=F}
+fn_voronoi <- function(sfo, extent, boundary){
+  # Geometries using dismo (bc st_voronoi merges layers)
+  vor <- sfo %>%
+    as("Spatial")
+  
+  # make a voronoi
+  vor <- vor %>%
+    voronoi(ext = extent(as(extent, "Spatial"))) %>%
+    st_as_sf() %>%
+    st_intersection(boundary)
+  
+  # merge cluster voronois
+  vor <- vor %>%
+    group_by(groups) %>%
+    summarize(group_percent_maya = sum(PEMAYA)/sum(POBTOT.y), 
+              do_union=T) %>%
+    st_cast() %>%
+    st_snap(tolerance=1000) %>%
+    st_union()
+    
+  
+  # vor <- vor %>%
+  #   filter(!is.na(groups))
+  
+  # return
+  vor
+}
+
+lp_voronoi <- fn_voronoi(gov_lp1, peten_extent, gov_b)
+
+```
+
+```{r}
+png(filename="unshiny4.png",
+    width=1000,
+    height=800)
+ggplot() +
+  geom_sf(data=gov_b) +
+  geom_sf(data=cluster_polys,
+          mapping=aes(fill=cluster_percent_maya),
+          lwd=0) +
+  scale_fill_continuous(guide=F) +
+  geom_sf(data=net_lines,
+          color="red") +
+  geom_sf(data=gov_lp1)
+```

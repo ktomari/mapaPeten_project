@@ -1,0 +1,507 @@
+---
+title: "Cleaning Official Data"
+author: "Kenji Tomari"
+date: "2/27/2019"
+output:
+  html_document:
+    theme: journal
+    toc: yes
+    toc_depth: '2'
+    toc_float: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(sf)
+library(tidyverse)
+library(readxl)
+library(stringr)
+library(foreign)  # open dbf
+library(DT)
+```
+
+# Set Up
+
+```{r}
+num_departments <- 22
+num_municipios <- 12
+```
+
+## Boundaries
+
+```{r}
+gov_b <- st_read("data_official/departamentos_gtm/departamentos_gtm.shp")
+
+# Subset peten
+gov_b <- gov_b %>%
+  filter(nombre=="PETEN")
+
+# st_write(gov_b,
+#          dsn="acdip_pop_project.gpkg",
+#          layer="gov_b"
+# )
+```
+
+```{r eval=F}
+ggplot() +
+  geom_sf(data=gov_db)
+```
+
+# Exploring Metadata
+
+```{r}
+gov_ge_meta <- read.dbf("data_official/descriptores/descriptor_grupo_etnico.dbf")
+gov_ge_meta
+```
+
+```{r}
+gov_pop_meta <- read.dbf("data_official/descriptores/descriptor_pob_edad.dbf")
+gov_pop_meta
+```
+
+```{r}
+rm(gov_ge_meta, gov_pop_meta)
+```
+
+```{r}
+read.dbf("data_official/descriptores/descriptor_PEA_rama_actividad.dbf")
+
+```
+
+```{r}
+read_xls("data_official/INE_CENSO_2002_LUGAR_POBLADO/ESTADO_CIVIL.xls")
+```
+
+
+# Census Places
+
+```{r}
+gov_lp <- st_read("data_official/lugares_poblados_gtm/lugares_poblados_gtm.shp")
+```
+
+## Subset Peten
+
+```{r}
+# Error Checking
+if(length(unique(gov_lp$departamen))!=num_departments) stop()
+
+# subset peten
+gov_lp <- gov_lp %>%
+  filter(departamen=="PETEN")
+
+gov_lp <- gov_lp %>%
+  mutate(cod_censo = as.character(cod_censo))
+```
+
+## Clean Data
+
+```{r}
+# fix typos in categoria
+fn_typos <- function(y){
+  sapply(y, function(x){
+    if(x == "PAERCELAMIENT") return("PARCELAMIENTO")
+    else if(x == "FIINCA") return("FINCA")
+    else if(x == "HCIENDA") return("HACIENDA")
+    else return(x)
+  })
+}
+
+# make categoria a char & fix typos
+gov_lp <- gov_lp %>%
+  mutate(categoria = as.character(categoria)) %>%
+  mutate(categoria = fn_typos(categoria))
+
+gov_lp <- gov_lp %>%
+  mutate(lugar_pobl = as.character(lugar_pobl))
+```
+
+---
+
+# Census Data
+
+```{r}
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Data: POB_TOTAL_EDAD.xls
+# Note: "data_official/POB_TOTAL_EDAD.xls" is identical
+gov_pop <- read_xls("data_official/INE_CENSO_2002_LUGAR_POBLADO/POB_TOTAL_EDAD.xls")
+# glimpse(gov_pop)
+```
+
+## Subset Peten
+
+```{r}
+# Error Checking
+if(length(unique(gov_pop$DEPARTAMEN))!=num_departments) stop()
+
+# Subset Peten
+gov_pop <- gov_pop %>%
+  filter(DEPARTAMEN=="PETEN")
+```
+
+## Clean Data
+
+```{r}
+# # Remove GROUPS (Age Stratification)
+# gov_pop <- gov_pop %>%
+#   select(-contains("GRUPO"))
+
+# fix typo in MUNICIPIO
+gov_pop <- gov_pop %>%
+  mutate(MUNICIPIO = replace(MUNICIPIO,
+                             MUNICIPIO == "LALIBERTAD",
+                             "LA LIBERTAD"))
+
+gov_pop <- gov_pop %>%
+  mutate(COD_CENSO = as.character(COD_CENSO))
+
+# fix group names
+grupos <- c(
+  "0-4",
+  "5-9",
+  "10-14",
+  "15-19",
+  "20-24",
+  "25-29",
+  "30-34",
+  "35-39",
+  "40-44",
+  "45-49",
+  "50-54",
+  "55-59",
+  "60-64",
+  "65+"
+)
+
+pop_names <- names(gov_pop)
+for(i in seq_along(pop_names)){
+  nm <- pop_names[i]
+  if(str_detect(nm, "GRUPO")){
+    nm <- str_replace(nm, "GRUPO", "AGE_")
+    group <- grupos[as.numeric(str_extract(nm, "\\d{1,}"))]
+    nm <- str_replace(nm, "\\d{1,}", group)
+    pop_names[i] <- nm
+  }
+}
+names(gov_pop) <- pop_names
+rm(i, nm, pop_names, group, grupos)
+
+# remove zero pop data.
+gov_pop <- gov_pop %>%
+  filter(POBTOT > 0 | !is.na(POBTOT))
+
+# error checking
+if(length(unique(gov_pop$MUNICIPIO))!=num_municipios) stop()
+```
+
+## Subset Desired Columns
+
+```{r}
+gov_pop <- gov_pop %>%
+  select(COD_CENSO, POBTOT, contains("AGE"), URBANA, RURAL)
+```
+
+---
+
+# Ethnic Groups
+
+```{r}
+gov_ge <- read_xls("/Users/ken/Documents/UC Davis Documents/Research/acdip_map_population_project/data_official/INE_CENSO_2002_LUGAR_POBLADO/GRUPO_ETNICO.xls")
+glimpse(gov_ge)
+```
+
+## Data Exploration
+
+```{r eval=F}
+# check to make sure math adds up [CLEAR]
+gov_ge %>%
+  mutate(theoretical_pop = GEIND + GENOIND) %>%
+  filter(theoretical_pop != POBTOT)
+
+gov_ge %>%
+  mutate(theoretical_pop = PEMAYA + PEXINKA + PEGARIFUNA + PELADINA + PEOTRA) %>%
+  filter(theoretical_pop != POBTOT)
+
+# check for TOTAL where no POBTOT [CLEAR]
+gov_ge %>%
+  filter(POBTOT == 0 & TOTAL > 0)
+```
+
+## Subset Peten
+
+```{r}
+# Error Checking
+if(length(unique(gov_ge$DEPARTAMEN))!=num_departments) stop()
+
+# subset peten
+gov_ge <- gov_ge %>%
+  filter(DEPARTAMEN=="PETEN")
+
+```
+
+## Data Cleaning
+
+```{r}
+# Remove populationless rows
+gov_ge <- gov_ge %>%
+  filter(POBTOT > 0 | !is.na(POBTOT))
+```
+
+```{r}
+# fix typo
+gov_ge <- gov_ge %>%
+  mutate(MUNICIPIO = replace(MUNICIPIO,
+                             MUNICIPIO == "LALIBERTAD",
+                             "LA LIBERTAD"))
+
+gov_ge <- gov_ge %>%
+  mutate(COD_CENSO = as.character(COD_CENSO))
+
+# error checking
+if(length(unique(gov_ge$MUNICIPIO))!=num_municipios) stop()
+```
+
+## Subset Desired Columns
+
+```{r}
+gov_ge <- gov_ge %>%
+  select(COD_CENSO,  # unique ID
+         POBTOT,  # total population (differs from TOTAL)
+         GEIND, GENOIND,  # count of indigenous/non-indigenous
+         contains("PE"),  # ethnicities
+         TOTAL, MAYA, XINKA, GARIFUNA, ESPANOL, OTRO)  # languages
+```
+
+
+# Joining Census Places & Census Data
+
+## Are Duplicate Rows Present?
+
+```{r}
+# census places data
+gov_lp %>%
+  group_by(cod_censo) %>%
+  filter(n() > 1) %>%
+  arrange(cod_censo)
+```
+
+```{r}
+# population data
+gov_pop %>%
+  group_by(COD_CENSO) %>%
+  filter(n() > 1) %>%
+  arrange(COD_CENSO)
+```
+
+```{r}
+# ethnic group data
+gov_ge %>%
+  group_by(COD_CENSO) %>%
+  filter(n() > 1) %>%
+  arrange(COD_CENSO)
+```
+
+## Cut Duplicates
+
+Here, we first drop duplicate cod_censo values. There's probably a rhyme or reason to the duplications, but since there are < 10 sites that are duplicated (at least one was the same town name, same pop data, but different coordinates), we'll just ignore them.
+
+```{r}
+# cut dupes
+gov_lp2 <- gov_lp %>%
+  group_by(cod_censo) %>%
+  filter(n() < 2) %>%
+  ungroup()
+
+gov_pop2 <- gov_pop %>%
+  group_by(COD_CENSO) %>%
+  filter(n() < 2) %>%
+  ungroup()
+
+gov_ge2 <- gov_ge %>%
+  group_by(COD_CENSO) %>%
+  filter(n() < 2) %>%
+  ungroup()
+```
+
+```{r}
+gov_ge2
+```
+
+
+## Left Join Pop/Ethnicities to Census Places
+
+```{r}
+# join
+gov_lp2 <- gov_lp2 %>%
+  left_join(gov_pop2, 
+            by=c("cod_censo"="COD_CENSO")) %>%
+  left_join(gov_ge2,
+            by=c("cod_censo"="COD_CENSO"))
+
+# No pop data
+# gov_lp2 %>%
+#   filter(POBTOT.x == 0)
+
+# gov_lp2
+```
+
+### Explore Join Results
+
+```{r eval=F}
+# Why are are POBTOTs not equal?
+gov_lp2 %>%
+  mutate(pop_comparison= ifelse(POBTOT.x==POBTOT.y, T, F)) %>%
+  filter(pop_comparison==F)
+# it appears two rows are not equal; so lets keep both.
+
+gov_lp2 %>%
+  filter(is.na(POBTOT.y))
+# great no NA values for POBTOT.y
+```
+
+## Create a Percentage Maya Column
+
+```{r}
+gov_lp2 <- gov_lp2 %>%
+  mutate(PercentMaya = PEMAYA/POBTOT.y)
+```
+
+# Determining Important `categoria`
+
+Ok there are a number of ways I might go about choosing which categories to keep. One is to do the simplest and drop categories with no population data at all. Another is to do that and to drop categories at some threshold where there is too much missing data. Another is to do some combination of the above and also drop populations with insignificant Mayan populations.
+
+Ultimately I think it would be good to compare two modes: with some "optimal mayan concentration", and one data set that is more inclusive. I would like to think about how we could continue exploring this "optimal mayan concentration" method by teasing apart this data statistically, but for now I think I'll simply run models using the most inclusive dataset (sans empty categories). 
+
+On that note, here are some things to consider: some categories have a lot of missing data (compared to all observations. E.g. Finca or Otra); some categories having a lot of missing data proportionally, but overall seem to not have a huge impact due to its total size (eg. Colonia); some categories seem to have a high proportion Mayans while others do not; we could also divide up categories such that prioritized categories (say high concentration of Mayans) keep both missing and intact data, while non-priority categories would only keep data with population data still intact.
+
+A further consideration is that this is a test run for interpolating values for NGO member communities that may not be in the list of census places. In total that list is about 300 communities/villages, but almost certainly some of these have been accounted for by the official census.
+
+Below is a summary table with some of the key factors.
+
+```{r}
+gov_lp2 %>%
+  st_set_geometry(NULL) %>%
+  group_by(categoria) %>%
+  summarize(
+    total_maya = sum(PEMAYA, na.rm=T),
+    total_pop = sum(POBTOT.y, na.rm=T),
+    percent_maya = sum(PEMAYA, na.rm=T)/sum(POBTOT.y, na.rm=T), 
+    n=n(),
+    popped = length(POBTOT.y[POBTOT.y>0]), # pt with pop data
+    no_pop = length(POBTOT.y[POBTOT.y==0]),  # pt with no population data.
+    no_pop_percent = no_pop/n
+  ) %>%
+  arrange(no_pop_percent) %>%
+  DT::datatable(options=list(scrollX=T))
+```
+
+## Create Subsetted Datasets based on `categoria`
+
+```{r}
+# Inclusive: minus empty categories.
+gov_lp_inclusive <- gov_lp2 %>%
+  filter(!(categoria %in% c("BARRIO", "HACIENDA", "PARCELA", "PARQUE NATURA")))
+```
+
+# Save Clean & Spatialized Census Data
+
+```{r eval=F}
+# save to gpkg
+st_write(
+  obj=gov_lp_inclusive,
+  dsn="acdip_pop_project.gpkg",
+  layer="gov_lp_inclusive",
+  delete_layer=T
+)
+```
+
+### Quick Map of All Points
+
+```{r eval=F}
+png(filename="quick_map_all_points_cleaned.png",
+    width=1000,
+    height=1000)
+ggplot() +
+  geom_sf(data=gov_b) +
+  geom_sf(data=gov_lp_inclusive,
+          mapping=aes(color=categoria)) +
+  ggtitle("Map of All Census Places")
+```
+
+![All Points (Clean)](quick_map_all_points_cleaned.png)
+
+### Quick Map of All Points w/ Pop DAta
+
+```{r eval=F}
+tmp <- gov_lp_inclusive %>%
+  filter(POBTOT.y > 0)
+png(filename="quick_map_pop_points_cleaned.png",
+    width=1000,
+    height=1000)
+ggplot() +
+  geom_sf(data=gov_b) +
+  geom_sf(data=tmp,
+          mapping=aes(color=categoria)) +
+  ggtitle("Map of All Populated Census Places")
+dev.off()
+rm(tmp)
+```
+
+![Quick Map of Points with Population Data](quick_map_pop_points_cleaned.png)
+
+
+# Gov: Streets
+
+```{r}
+gov_c <- st_read("data_official/caminos_gtm/caminos_gtm.shp")
+
+# Subset peten
+gov_c <- gov_c[gov_b,,op=st_intersects]
+```
+
+## Quick map of Gov Streets
+
+```{r eval=F}
+png(filename="quick_map_of_all_gov_streets.png",
+    width=1000,
+    height=1000)
+ggplot() +
+  geom_sf(data=gov_b) +
+  geom_sf(data=gov_c, aes(col=cobertura)) + 
+  ggtitle("Government Data on Roads in Peten")
+```
+
+![](quick_map_of_all_gov_streets.png)
+
+---
+
+# Next Steps
+
+The goal is to determine if any towns act as population hubs, so we'll look at clustering based on population values. Ideally we would define neighbors using manhattan distances with some sort of distance decay.
+
+The point of this exercise is not to point out that larger cities act as hubs, but to find hubs off the beaten path, so to speak. An NGO that is responsible for a large region; or an organizer who is trying to reach the maximum number of people, could make use of a better understanding of how remote clusters are centered. Sometimes it comes down to trying to figure how much time to spend in what area.
+
+**Obstacles**
+
+* Imputing values for empty populations (based on neighbors)
+* Definition of hubs (concentration of towns both spatially and by population)
+
+**missing population values**
+I think we should **impute** values for obs with pops = 0 based on neighbor values (pick lowest neighbor); if no nearby neighbors, drop obs entirely (or take the 1% most isolated towns with pop data and assign it a mean of that); neighbor is defined by some distance (5km?).
+
+It would great if we could impute some value that reflects a decay. Moreover, it would be great if we could do this recursively, as some settlements may be dotted along side a road, such that they may not be close to any city (and thus get dropped), but their neighbors may receive an imputed value.
+
+A future project may be to estimate population density by determining area for known population points; unknown population points; and determine some predictive method of scaling it based on distance to closest population point. I would assume that known population points are the bigger ones and that the unknown population points would tend to be smaller.
+
+**nb and w**
+Let's make a nb with distance (5km?); if possible distance decay;
+
+**Clustering**
+LISA using population
+
+
+
+
+

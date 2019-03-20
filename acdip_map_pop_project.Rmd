@@ -1,0 +1,288 @@
+---
+title: "ACDIP Population Project"
+author: "Kenji Tomari"
+date: "2/27/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Libraries
+
+```{r}
+library(RANN)
+library(sf)
+library(tidyverse)
+library(stringr)
+library(readxl)
+library(VIM)
+library(osmdata)
+library(readxl)
+library(foreign)  # open dbf
+library(stringr)
+```
+
+# ACDIP Data
+
+## Data Cleaning Part I
+
+```{r eval=F}
+aldeas <- read_csv("data_acdip/Comunidades de ACDIP (version2) - Datos Aldeas.csv",
+                   col_types=cols(.default = "c"),
+                   na=c("na", "NA", "")
+                   )
+
+# remove first two rows with dummy data
+aldeas <- aldeas %>%
+  filter(!str_detect(`Nombre de Aldea`, "ejemplo"))  %>%
+  filter(!is.na(`Nombre de Aldea`))
+
+aldeas <- aldeas %>%
+  separate(col=Coordenadas,
+           into=c("lat", "long"),
+           sep=";",
+           extra="drop")  # to ignore the last semi-colon
+
+# which rows seem to have insufficient digits in coords?
+aldeas %>%
+  filter(str_detect(lat, "\\.\\d{1,4}$") | str_detect(long, "\\.\\d{1,4}$") )
+```
+
+## Data Cleaning Part II
+
+Spatialize Data.
+
+```{r eval=F}
+# spatialize (original data is from android app)
+aldeas <- st_as_sf(aldeas,
+         agr="identity",
+         coords=c("long", "lat"),
+         crs=4326)
+
+# get crs for guatemala
+gt_crs <- st_crs(st_read(
+  "data_official/lugares_poblados_gtm/lugares_poblados_gtm.shp"))
+
+aldeas <- st_transform(aldeas, gt_crs)
+```
+
+## Save/Read in GPKG
+
+```{r eval=F}
+st_write(aldeas,
+         dsn="acdip_pop_project.gpkg",
+         layer="aldeas",
+         delete_layer=T)
+```
+
+```{r}
+aldeas <- st_read(dsn="acdip_pop_project.gpkg",
+                  layer="aldeas")
+```
+
+
+---
+
+# Government Data
+
+## Y2002 Census Places
+
+```{r eval=F}
+gov_cp <- st_read("data_official/lugares_poblados_gtm/lugares_poblados_gtm.shp")
+
+# Subset Peten
+gov_cp <- gov_cp %>%
+  filter(departamen=="PETEN")
+```
+
+## Y2002 Census Populations
+
+```{r}
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Ignored Population Census Data
+
+# unclear what the shp version is, weird columns, eg DE_5_A_9
+# gov_pop <- read_xls("data_official/INE_CENSO_2002_LUGAR_POBLADO/POB_TOTAL_EDADshp.xls")
+
+# Note, POB_7_14_AÑOS_RAMA_ACTIVIDAD goes into some detail we don't need.
+# gov_pop3 <- read_xls("data_official/INE_CENSO_2002_LUGAR_POBLADO/POB_7_14A_OS_RAMA_ACTIVIDAD.xls")
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Metadata: descriptor_pob_edad.dbf
+# For: POB_TOTAL_EDAD
+
+meta_pop <- read.dbf("data_official/descriptores/descriptor_pob_edad.dbf",
+                     as.is=T)
+# note issues with character encoding.
+# meta_pop
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Data: POB_TOTAL_EDAD.xls
+# Note: "data_official/POB_TOTAL_EDAD.xls" is identical
+gov_pop <- read_xls("data_official/INE_CENSO_2002_LUGAR_POBLADO/POB_TOTAL_EDAD.xls")
+
+# Subset Peten
+gov_pop <- gov_pop %>%
+  filter(DEPARTAMEN=="PETEN")
+
+# # Remove GROUPS (Age Stratification)
+# gov_pop <- gov_pop %>%
+#   select(-contains("GRUPO"))
+
+# fix typo in MUNICIPIO
+gov_pop[gov_pop$MUNICIPIO=="LALIBERTAD", "MUNICIPIO"] <- "LA LIBERTAD"
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Data: pob_edad_mun_censo02_INE.xls
+# Note: I believe this is aggregated by municipio
+gov_pop_aggr <- read_xls("data_official/pob_edad_mun_censo02_INE.xls")
+
+# Subset Peten
+gov_pop_aggr <- gov_pop_aggr %>%
+  filter(DEPARTAMEN=="Peten")
+
+# # Remove GROUPS (Age Stratification)
+# gov_pop_aggr2 <- gov_pop_aggr %>%
+#   select(-contains("GRUPO"))
+
+
+
+gov_pop %>%
+  select(-contains("GRUPO")) %>%
+  group_by(MUNICIPIO) %>%
+  summarize(
+    summed_pop_total = sum(POBTOT),
+    summed_hombres = sum(HOMBRES),
+    summed_mujeres = sum(MUJERES),
+    summed_urbana = sum(URBANA),
+    summed_rural = sum(RURAL)
+  ) %>%
+  arrange(MUNICIPIO)
+```
+
+```{r}
+gov_pop_aggr %>%
+  arrange(MUNICIPIO)
+```
+
+
+### Comparing Aggregate Population Numbers in Municipios
+
+```{r}
+tmp1 <- gov_pop %>%
+  select(-contains("GRUPO")) %>%
+  group_by(MUNICIPIO) %>%
+  summarize(summed_pop_total=sum(POBTOT),
+            summed_hombres=sum(HOMBRES),
+            summed_mujeres=sum(MUJERES),
+            summed_urbana=sum(URBANA),
+            summed_rural=sum(RURAL)
+            ) %>%
+  arrange(MUNICIPIO)
+tmp1 <- tmp1[2:ncol(tmp1)]
+```
+
+
+```{r}
+tmp2 <- gov_pop_aggr %>%
+  select(-contains("GRUPO"), -c(AREA, OID, DEPTO, DEPARTAMEN, CODIGO)) %>%
+  arrange(MUNICIPIO)
+tmp2 <- tmp2[2:ncol(tmp2)]
+```
+
+```{r}
+# Difference between Summed Municipios and Municipios
+tmp1 - tmp2
+```
+
+```{r}
+rm(tmp1, tmp2)  # gc
+```
+
+
+## Population Projections
+
+```{r eval=F}
+# read
+gov_pp <- read_xls("data_official/proyecciones_pob_2000_2010_municipios_INE(1).xls")
+
+# Subset Peten
+gov_pp <- gov_pp %>%
+  filter(DEPARTAMEN=="Peten")
+
+gov_pp
+```
+
+The `AREA` is km^2. It is not exactly the same as the areas of derived from the IGN. This data is on the level of municipio. It is unclear what the columns N3:N13 actually represent (presumably the years). Its entirely possible that the file itself is misnamed, as the last census was in 2002, so it makes sense that this might be the projection based on 2003 onwards.
+
+### Explore growth equation
+
+```{r}
+names(gov_pp)
+```
+
+
+```{r}
+gov_pp2 <- gov_pp %>%
+  group_by(MUNICIPIO) %>%
+  select(-c(CODIGO, DEPTO, DEPARTAMEN, AREA, OID)) %>%
+  gather(key="year", value="pop", ...=sapply(3:13, function(x) paste0("N", x))) %>%
+  ungroup() %>%
+  mutate(year=as.numeric(str_replace(year, "N", ""))) %>%
+  arrange(MUNICIPIO)
+
+gov_pp2 <- split(gov_pp2, gov_pp2$MUNICIPIO)
+gov_pp2 <- lapply(gov_pp2, function(x){
+  lm(pop ~ year, data=x)$coefficients
+})
+
+# populations in Y2002... is wrong!
+tmp <- sapply(gov_pp2, function(x){
+  unname(x[1] + (x[2] * 2))
+})
+
+tmp <- data.frame(MUNICIPIO=toupper(names(tmp)), pop_est2002=unname(tmp), stringsAsFactors = F)
+
+gov_pop_aggr %>%
+  arrange(MUNICIPIO) %>%
+  mutate(MUNICIPIO = toupper(MUNICIPIO)) %>%
+  select(
+    -contains("GRUPO"),
+    -c(
+      CODIGO,
+      DEPTO,
+      DEPARTAMEN,
+      AREA,
+      HOMBRES,
+      MUJERES,
+      URBANA,
+      RURAL,
+      OID
+    )
+  ) %>%
+  left_join(tmp, by = "MUNICIPIO")
+```
+
+
+## Vectors: Municipios
+
+```{r eval=F}
+gov_m <- st_read("data_official/municipios_gtm/municipios_GTM.shp")
+
+# Subset Peten
+gov_m <- gov_m %>%
+  filter(Departamen=="Petén")
+```
+
+```{r eval=F}
+# Sample Map
+ggplot() +
+  geom_sf(data=gov_m,
+          mapping=aes(),
+          color="#ff66ff",
+          fill=NA,
+          lwd=0.3)
+```
+

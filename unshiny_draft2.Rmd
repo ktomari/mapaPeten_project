@@ -1,0 +1,155 @@
+---
+title: "unshiny_draft2"
+author: "Kenji Tomari"
+date: "3/18/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+
+# Libraries
+
+```{r}
+library(dplyr)
+library(sf)
+library(sp)
+library(spdep)
+library(linkcomm)
+library(dismo)
+```
+
+# Data
+
+```{r}
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+gov_lp_inclusive <- st_read(
+  dsn="acdip_pop_project.gpkg",
+  layer="gov_lp_inclusive"
+)
+
+gov_b <- st_read(
+  dsn="acdip_pop_project.gpkg",
+  layer="gov_b"
+)
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# bounding box
+bbox <- st_bbox(gov_b)
+
+# bounding box to polygon
+peten_extent <- bbox %>%
+  st_as_sfc() %>%
+  st_cast(to="POLYGON")
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# highways
+hwy_primary <- st_read(
+  dsn="acdip_pop_project.gpkg",
+  layer="osm_hwy_primary"
+) %>%
+  st_intersection(gov_b)
+hwy_secondary <- st_read(
+  dsn="acdip_pop_project.gpkg",
+  layer="osm_hwy_secondary"
+) %>%
+  st_intersection(gov_b)
+hwy_tertiary <- st_read(
+  dsn="acdip_pop_project.gpkg",
+  layer="osm_hwy_tertiary"
+) %>%
+  st_intersection(gov_b)
+```
+
+# User Choices
+
+```{r eval=F}
+# user_cluster <- "hiearchical_clustering"
+user_k <- 0.9
+user_dist <- 5000 # meters
+user_centrality <- "degree"
+```
+
+# Mayan Neighbors
+
+```{r}
+gov_lp_inclusive %>%
+  st_set_geometry(NULL)
+```
+
+```{r}
+
+fn_maya_matrix <- function(sfo, radius=5000, id_column="cod_censo"){
+  spo <- sfo %>%
+    filter(POBTOT.y > 0 & !is.na(POBTOT.y)) %>%
+    as("Spatial")
+  
+  # create nb matrix
+  nb <- spo %>%
+    sp::coordinates() %>%
+    spdep::dnearneigh(d1 = 1,
+                      d2 = radius,
+                      row.names = spo@data[[id_column]])
+  
+  nb <- nb2mat(nb, zero.policy = T)
+  nb <- apply(nb, MARGIN=2, FUN=function(x){
+    sapply(x, function(y) ifelse(y>0,1,0))
+  })
+  colnames(nb) <- rownames(nb)
+  
+  # create percent mayan edges matrix
+  m <- sfo %>%
+    st_set_geometry(NULL) %>%
+    filter(POBTOT.y > 0 & !is.na(POBTOT.y)) %>%
+    dplyr::select(cod_censo, PercentMaya)
+  
+  m2 <- lapply(m$PercentMaya, function(x){
+    (x+m$PercentMaya)/2
+  })
+  
+  m2 <- do.call(rbind, m2)
+  
+  rownames(m2) <- colnames(m2) <- m$cod_censo
+  
+  m2 <- nb*m2
+  
+  m2
+}
+
+m <- fn_maya_matrix(gov_lp_inclusive)
+```
+
+
+```{r}
+gov_lp_populated <- gov_lp_inclusive %>%
+  filter(POBTOT.y > 0 & !is.na(POBTOT.y))
+
+m_dist <- dist(coordinates(as(gov_lp_populated, "Spatial")))
+```
+
+```{r}
+adj_mat <- m %>%
+  graph.adjacency(mode="undirected", weighted=T) %>%
+  as_tbl_graph() 
+
+adj_mat
+
+lco <- adj_mat %>%
+  activate(nodes) %>%
+  filter(!node_is_isolated()) %>%
+  activate(edges) %>%
+  as_tibble() %>%
+  as.data.frame()
+
+dim(m_dist)
+```
+
+
+```{r}
+lco <- getLinkCommunities(lco, dist=m_dist)
+```
+

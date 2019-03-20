@@ -1,0 +1,152 @@
+---
+title: "Data OSM"
+author: "Kenji Tomari"
+date: "3/5/2019"
+output:
+  html_document:
+    theme: journal
+    toc: yes
+    toc_depth: '2'
+    toc_float: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(sf)
+library(osmdata)
+```
+
+# Gov: Boundaries
+
+```{r}
+gov_b <- st_read("data_official/departamentos_gtm/departamentos_gtm.shp")
+
+# Subset peten
+gov_b <- gov_b %>%
+  filter(nombre=="PETEN")
+```
+
+# Bounding Box
+
+```{r}
+gov_b4326 <- gov_b %>%
+  st_transform(crs=4326)
+
+peten_bbox <- gov_b4326 %>%
+  st_bbox()
+```
+
+# OSM: Streets
+
+```{r eval=F}
+# create an overpass query based on this bounding box
+opq <- opq(bbox=peten_bbox)
+
+# add feature to overpass query
+opq <- add_osm_feature(opq=opq,
+                       key="highway")
+
+# connect to osm and download
+peten_highway <-
+  osmdata_sf(q = opq,
+             quiet = F)
+```
+
+```{r eval=F}
+hwy <- peten_highway$osm_lines[gov_b4326,,op=st_intersects]
+saveRDS(hwy, "hwy.rData")
+```
+
+```{r}
+hwy <- readRDS("hwy.rData")
+```
+
+```{r}
+hwy_summary <- hwy %>%
+  st_set_geometry(NULL) %>%
+  group_by(highway) %>%
+  summarize(n=n()) %>%
+  arrange(desc(n))
+
+hwy_summary
+```
+
+```{r}
+hwy2 <- split(hwy, 
+              hwy$highway)
+```
+
+```{r eval=F}
+png(filename="quick_map_of_osm_streets.png",
+    width=1000,
+    height=1000)
+ggplot() +
+  geom_sf(data=gov_b4326) +
+  geom_sf(data=hwy2$primary, col="red") +
+  geom_sf(data=hwy2$secondary, col="blue") +
+  geom_sf(data=hwy2$tertiary, col="green") +
+  ggtitle("Map of OSM 1,2,3iary Highways")
+```
+
+![](quick_map_of_osm_streets.png)
+
+# Save Primary, Secondary, Tertiary Highways
+
+```{r eval=F}
+hwy2$primary <- hwy2$primary %>%
+  st_transform(crs=st_crs(gov_b))
+
+hwy2$secondary <- hwy2$secondary %>%
+  st_transform(crs=st_crs(gov_b))
+
+hwy2$tertiary <- hwy2$tertiarys %>%
+  st_transform(crs=st_crs(gov_b))
+
+# save to gpkg
+st_write(
+  obj=hwy2$primary,
+  dsn="acdip_pop_project.gpkg",
+  layer="osm_hwy_primary",
+  delete_layer=T
+)
+st_write(
+  obj=hwy2$secondary,
+  dsn="acdip_pop_project.gpkg",
+  layer="osm_hwy_secondary",
+  delete_layer=T
+)
+st_write(
+  obj=hwy2$tertiary,
+  dsn="acdip_pop_project.gpkg",
+  layer="osm_hwy_tertiary",
+  delete_layer=T
+)
+```
+
+```{r eval=F}
+gov_lp_inclusive <- st_read(
+  dsn="acdip_pop_project.gpkg",
+  layer="gov_lp_inclusive"
+)
+tmp <- gov_lp_inclusive %>%
+  filter(POBTOT.y > 0 & !is.na(POBTOT.y)) %>%
+  mutate(POBTOT.y = cut(log(POBTOT.y), 9, include.lowest=T, dig.lab=1))
+png(filename="quick_map_pop_points_cleaned_color_by_pop.png",
+    width=1000,
+    height=1000)
+ggplot() +
+  geom_sf(data=gov_b,
+          fill="gray") +
+  geom_sf(data=hwy2$primary, col="red") +
+  geom_sf(data=hwy2$secondary, col="blue") +
+  geom_sf(data=hwy2$tertiary, col="green") +
+  geom_sf(data=tmp,
+          mapping=aes(color=POBTOT.y)) +
+  scale_color_brewer(palette="OrRd")+
+  ggtitle("Map of All Populated Census Places (logscale)")
+dev.off()
+rm(tmp)
+```

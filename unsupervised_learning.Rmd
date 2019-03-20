@@ -1,0 +1,122 @@
+---
+title: "unsupervised_learning"
+author: "Kenji Tomari"
+date: "3/11/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Libraries
+
+```{r}
+library(sf)
+library(sp)
+library(tidyverse)
+```
+
+
+# Data
+
+```{r}
+# st_layers(dsn="acdip_pop_project.gpkg")
+
+# Census Data
+gov_lp_inclusive <- st_read(
+  dsn="acdip_pop_project.gpkg",
+  layer="gov_lp_inclusive"
+)
+
+# Boundary
+gov_b <- st_read(
+  dsn="acdip_pop_project.gpkg",
+  layer="gov_b"
+)
+
+hwy_primary <- st_read(
+  dsn="acdip_pop_project.gpkg",
+  layer="osm_hwy_primary"
+) %>%
+  st_intersection(gov_b)
+hwy_secondary <- st_read(
+  dsn="acdip_pop_project.gpkg",
+  layer="osm_hwy_secondary"
+) %>%
+  st_intersection(gov_b)
+hwy_tertiary <- st_read(
+  dsn="acdip_pop_project.gpkg",
+  layer="osm_hwy_tertiary"
+) %>%
+  st_intersection(gov_b)
+```
+
+```{r}
+# remove empty pops, subset percentmayan
+gov_lp_subset <- gov_lp_inclusive %>%
+  filter(POBTOT.y > 0)
+
+# make sp
+gov_lp_subset_sp <- as(gov_lp_subset, "Spatial")
+
+# two methods of creating distance matrix
+matrix_of_dist1 <- dist(gov_lp_subset_sp@coords)
+# matrix_of_dist2 <- dist(cbind(as.data.frame(gov_lp_subset_sp@coords), gov_lp_subset_sp$PercentMaya))
+
+matrix_of_dist1
+
+clusters <- hclust(matrix_of_dist1)  # just geographic
+# clusters2 <- hclust(matrix_of_dist2)  # geographic + percent mayan
+```
+
+```{r}
+# just geographic
+plot(clusters)
+```
+
+```{r eval=F}
+# geographic + percent mayan
+plot(clusters2)
+```
+
+```{r eval=F}
+identical(clusters, clusters2)
+```
+
+
+```{r}
+gov_lp_subset <- gov_lp_subset %>%
+  mutate(
+    clust_20 = cutree(clusters, 20)
+    )
+```
+
+```{r eval=F}
+png(filename="pres_HierarchicalClustering_gov_lp.png",
+    width=1000,
+    height=800)
+ggplot()+
+  geom_sf(data=gov_b) +
+  geom_sf(data=hwy_primary, col="#0000ff") +
+  geom_sf(data=hwy_secondary, col="#3333cc") +
+  geom_sf(data=hwy_tertiary, col="#cc00ff") +
+  geom_sf(data=gov_lp_subset,
+          mapping=aes(color=factor(clust_20)),
+          size=3) +
+  scale_color_discrete(guide=guide_legend(title="Legend",
+                                         ncol=2))
+  # ggtitle("Hierarchical Cluster (k=10) - Simply Geographic")
+```
+
+```{r eval=F}
+ggplot()+
+  geom_sf(data=gov_b) +
+  geom_sf(data=hwy_primary, col="red") +
+  geom_sf(data=hwy_secondary, col="blue") +
+  geom_sf(data=hwy_tertiary, col="green") +
+  geom_sf(data=gov_lp_subset,
+          mapping=aes(color=factor(clust_10_mayan))) +
+  ggtitle("Hierarchical Cluster (k=10) - With Percent_Mayan")
+```
+

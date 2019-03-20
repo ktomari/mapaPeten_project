@@ -1,0 +1,105 @@
+---
+title: "maps"
+author: "Kenji Tomari"
+date: "3/7/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Libraries
+
+```{r}
+library(sf)
+library(tidyverse)
+```
+
+
+# Data
+
+```{r}
+# census data
+gov_lp_inclusive <- st_read(
+  dsn="acdip_pop_project.gpkg",
+  layer="gov_lp_inclusive"
+)
+
+# boundaries
+gov_b <- st_read("data_official/departamentos_gtm/departamentos_gtm.shp")
+
+# Subset peten
+gov_b <- gov_b %>%
+  filter(nombre=="PETEN")
+
+# roads
+hwy_primary <- st_read(
+  dsn="acdip_pop_project.gpkg",
+  layer="osm_hwy_primary"
+)
+hwy_secondary <- st_read(
+  dsn="acdip_pop_project.gpkg",
+  layer="osm_hwy_secondary"
+)
+hwy_tertiary <- st_read(
+  dsn="acdip_pop_project.gpkg",
+  layer="osm_hwy_tertiary"
+)
+```
+
+# General Population Maps
+
+```{r}
+gov_lp_circles <- gov_lp_inclusive %>%
+  filter(POBTOT.y > 0) %>%
+  mutate(circle_size = (log10(cut(POBTOT.y, breaks=4, labels=F)*(10/4)))*5000)
+
+gov_lp_circles <- gov_lp_circles %>%
+  st_buffer(dist=gov_lp_circles$circle_size)
+```
+
+```{r}
+log10(4)
+
+log10(1 * (10/4)) 
+```
+
+
+```{r eval=F}
+png(filename="quick_map_of_populations_simple.png",
+    width=1500,
+    height=1500)
+ggplot() +
+  geom_sf(data=gov_b) +
+  geom_sf(data=gov_lp_circles,
+          mapping=aes(alpha=POBTOT.y),
+          fill="black",
+          color=NA) +
+  ggtitle("Population Centers in Peten")
+```
+
+# Maya Population Map
+
+```{r eval=F}
+gov_lp_maya <- gov_lp_inclusive %>%
+  filter(POBTOT.y > 0)
+png(filename="quick_map_of_populations_simple.png",
+    width=1500,
+    height=1500)
+ggplot() +
+  geom_sf(data=gov_b) +
+  geom_sf(data=hwy_primary, col="red") +
+  geom_sf(data=hwy_secondary, col="blue") +
+  geom_sf(data=hwy_tertiary, col="green") +
+  geom_sf(data=gov_lp_maya,
+          mapping=aes(color=PercentMaya),
+          fill=NA) +
+  scale_color_gradient(low="yellow", high="red") +
+  ggtitle("Mayan Pops in Peten")
+```
+
+```{r}
+gov_lp_inclusive[which(gov_lp_inclusive$lugar_pobl=="SAN JOSE"),]
+```
+

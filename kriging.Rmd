@@ -1,0 +1,327 @@
+---
+title: "Kriging"
+author: "Kenji Tomari"
+date: "3/4/2019"
+output:
+  html_document:
+    theme: journal
+    toc: yes
+    toc_depth: '2'
+    toc_float: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Libraries
+
+```{r}
+libs <- c(
+  "sp",
+  "gstat",
+  "sf",
+  "tidyverse",
+  "readxl",
+  "rgeos"
+)
+suppressPackageStartupMessages({
+  libs <- lapply(libs, require, character.only = TRUE)
+})
+rm(libs)
+library(variosig)
+```
+
+```{r eval=F}
+detach("package:gstat", unload=TRUE)
+detach("package:geostatsp", unload=TRUE)
+```
+
+
+# Introduction
+
+Here we follow this [tutorial](https://rpubs.com/nabilabd/118172).
+
+Other Resources:
+
+* Jef Caers @ Stanford [youtube](https://www.youtube.com/watch?v=n4oDUjjtk44&list=PLh35GyCXlQaQ1LNGWr4vCD9AGOGni8yxq&index=2)
+
+We want to interpolate population values for unknown points
+
+# Data
+
+```{r}
+gov_lp_inclusive <- st_read(
+  dsn="acdip_pop_project.gpkg",
+  layer="gov_lp_inclusive"
+)
+
+control_points <- gov_lp_inclusive %>%
+  filter(POBTOT.y > 0) 
+
+spdf <- as(control_points, "Spatial")
+```
+
+# Data Exploration
+
+```{r}
+hist(log(control_points$POBTOT.y))
+```
+
+# Find Smallest Distances to each Road Type
+
+## Data (OSM)
+
+```{r}
+hwy_primary <- st_read(
+  dsn="acdip_pop_project.gpkg",
+  layer="osm_hwy_primary"
+)
+hwy_secondary <- st_read(
+  dsn="acdip_pop_project.gpkg",
+  layer="osm_hwy_secondary"
+)
+hwy_tertiary <- st_read(
+  dsn="acdip_pop_project.gpkg",
+  layer="osm_hwy_tertiary"
+)
+
+hwy_primary <- hwy_primary %>%
+  st_transform(crs=st_crs(control_points)) %>%
+  as("Spatial")
+
+hwy_secondary <- hwy_secondary %>%
+  st_transform(crs=st_crs(control_points)) %>%
+  as("Spatial")
+  
+hwy_tertiary <- hwy_tertiary %>%
+  st_transform(crs=st_crs(control_points)) %>%
+  as("Spatial")
+```
+
+## Distances
+
+```{r}
+shortest_primary <- shortest_secondary <- shortest_tertiary <-
+  numeric(nrow(spdf))
+
+for(i in seq_len(nrow(spdf))) {
+    shortest_primary[i] <- gDistance(spdf[i,], hwy_primary)
+    shortest_secondary[i] <- gDistance(spdf[i,], hwy_secondary)
+    shortest_tertiary[i] <- gDistance(spdf[i,], hwy_tertiary)
+}
+
+df <- data.frame(
+  shortest_primary,
+  shortest_secondary,
+  shortest_tertiary
+)
+
+df %>%
+  mutate(mean_dist = (shortest_primary +shortest_secondary+ shortest_tertiary)/3)
+
+df$shortest_overall <- apply(df, MARGIN = 1, function(x){
+  min(x["shortest_primary"], x["shortest_secondary"], x["shortest_tertiary"])
+})
+
+df$shortest_roadtype <- apply(df, MARGIN = 1, function(x){
+  if(x["shortest_primary"] < x["shortest_secondary"] &
+     x["shortest_primary"] < x["shortest_tertiary"]) return("primary")
+  
+  if(x["shortest_secondary"] < x["shortest_primary"] &
+     x["shortest_secondary"] < x["shortest_tertiary"]) return("secondary")
+  
+  if(x["shortest_tertiary"] < x["shortest_primary"] &
+     x["shortest_tertiary"] < x["shortest_secondary"]) return("tertiary")
+
+})
+
+spdf@data$dist_primary <- shortest_primary
+spdf@data$dist_secondary <- shortest_secondary
+spdf@data$dist_tertiary <- shortest_tertiary
+spdf@data$shortest_overall <- df$shortest_overall
+spdf@data$shortest_overall_log <- log(df$shortest_overall)
+spdf@data$shortest_overall_sq <- (df$shortest_overall)^2
+spdf@data$shortest_roadtype <- df$shortest_roadtype
+
+rm(shortest_primary, shortest_secondary, shortest_tertiary)
+
+spdf@data
+```
+
+```{r}
+hist(spdf@data$shortest_overall_log)
+```
+
+
+# Variogram without Regressors
+
+```{r eval=F}
+lzn.vgm <- variogram(object=POBTOT.y~1, 
+                     data=spdf,
+                     cutoff=10000,# units are meters
+                     cloud=T) 
+plot(lzn.vgm)
+```
+
+
+# Variogram with Regressors (no log)
+
+# Variogram using gstat
+
+```{r}
+# create gstat object (for universal kriging, so multivariate)
+g <- gstat(
+  id = "ln.pop",
+  formula = sqrt(POBTOT.y) ~ 1,
+  data = spdf,
+  maxdist = 3000,
+  nmax=10,
+  nmin=8
+)
+# get variogram 
+tmp <- variogram(g, cloud=T ,cutoff=3000)
+plot(tmp)
+```
+
+
+
+```{r}
+# create gstat object
+g <- gstat(
+  id = "ln.pop",
+  formula = POBTOT.y ~ 1,
+  data = spdf,
+  maxdist = 5000,
+  nmax=10,
+  nmin=3
+)
+# get variogram 
+vario <- variogram(g, cutoff=10000)
+png(filename="plot_attempted_semivariogram.png",
+    width=1000,
+    height=700)
+plot(vario, cex=4, pch=20)
+```
+
+```{r}
+fit.vario <- fit.variogram(vario, model=vgm(psill=3000,
+                                          model="Gau",
+                                          range=3000,
+                                          cutoff=3000))
+plot(fit.vario, cutoff=3000)
+```
+
+
+```{r}
+suppressMessages(gc()) 
+lzn.vgm <- variogram(object=POBTOT.y ~ 1 +shortest_roadtype, 
+                     data=spdf,
+                     cutoff=10000,# units are meters
+                     cloud=T) 
+plot(lzn.vgm)
+```
+
+
+```{r}
+suppressMessages(gc()) 
+lzn.vgm <- variogram(object=POBTOT.y ~ 1 + shortest_overall_sq, 
+                     locations = coordinates(spdf),
+                     width=10000,
+                     data=spdf,
+                     cutoff=10000,  # units are meters
+                     cloud=T,
+                     map=T) 
+plot(lzn.vgm)
+```
+
+
+```{r}
+suppressMessages(gc()) 
+lzn.vgm <- variogram(object=POBTOT.y ~ dist_primary + dist_secondary + dist_tertiary, 
+                     data=spdf,
+                     cutoff=10000,# units are meters
+                     cloud=T) 
+plot(lzn.vgm)
+```
+
+# Variogram + regressors (log)
+
+```{r}
+gc()
+lzn.vgm <- variogram(object=log(POBTOT.y) ~ shortest_overall_log, 
+                     data=spdf,
+                     cutoff=10000,  # units are meters
+                     cloud=T) 
+plot(lzn.vgm)
+```
+
+```{r}
+gc()
+lzn.vgm <- variogram(object=log(POBTOT.y) ~ dist_primary + dist_secondary + dist_tertiary, 
+                     data=spdf,
+                     cutoff=10000,  # units are meters
+                     cloud=T) 
+plot(lzn.vgm)
+```
+
+
+# Variogram (alternate transform of Y)
+
+```{r}
+lzn.vgm <- variogram(object=sqrt(POBTOT.y)~1, 
+                     data=spdf,
+                     cutoff=5000,  # units are meters
+                     cloud=T) 
+plot(lzn.vgm)
+```
+
+```{r}
+lzn.vgm <- variogram(object=(POBTOT.y^2)~1, 
+                     data=spdf,
+                     cutoff=5000,  # units are meters
+                     cloud=T) 
+plot(lzn.vgm)
+```
+
+```{r}
+lzn.vgm <- variogram(object=log10(POBTOT.y)~1, 
+                     data=spdf,
+                     cutoff=5000,  # units are meters
+                     cloud=T) 
+plot(lzn.vgm)
+```
+
+# USING GEOSTATSP
+
+```{r eval=F}
+geo_df <- as.geodata(spdf)
+spdf_variog <-  geostatsp::variog(geodata=spdf, 
+                                  formula=POBTOT.y ~ 1, 
+                                  option="cloud", 
+                                  max.dist=3000)
+spdf_variog
+plot(spdf_variog)
+```
+
+# Significance Test
+
+```{r}
+# Significance
+# library(variosig)
+lzn.vgm <- gstat::variogram(object=log(POBTOT.y)~1, 
+                     data=spdf)
+
+# varioEnv <- envelope(lzn.vgm, 
+#                      data = spdf,
+#                      formula = log(POBTOT.y)~1, 
+#                      nsim = 499)
+# saveRDS(varioEnv, "varioEnv")
+varioEnv <- readRDS("varioEnv")
+
+png(filename="mc_semivariogram.png",
+    width=1000,
+    height=800)
+envplot(varioEnv)
+```
+
