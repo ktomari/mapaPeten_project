@@ -1,0 +1,47 @@
+variable_name,English,Español
+gid,,
+codigo,,
+oid_,,
+cod_censo,Census ID,ID del Censo
+cod_cart,,
+nuevo_cod,,
+departamen,,
+municipio,Municipio,Municipio
+lugar_pobl,Name,Nombre
+categoria,Type,Tipo
+reubicado,,
+POBTOT_pop,Population,Población
+HOMBRES,Male Population,Población Masculina
+MUJERES,Female Population,Población Femenina
+EDADES_0a4,Ages 0-4,Edades de 0-4
+EDADES_5a9,Ages 5-9,Edades de 5-9
+EDADES_10a14,Ages 10-14,Edades de 10-14
+EDADES_15a19,Ages 15-19,Edades de 15-19
+EDADES_20a24,Ages 20-24,Edades de 20-24
+EDADES_25a29,Ages 25-29,Edades de 25-29
+EDADES_30a34,Ages 30-34,Edades de 30-34
+EDADES_35a39,Ages 35-39,Edades de 35-39
+EDADES_40a44,Ages 40-44,Edades de 40-44
+EDADES_45a49,Ages 45-49,Edades de 45-49
+EDADES_50a54,Ages 50-54,Edades de 50-54
+EDADES_55a59,Ages 55-59,Edades de 55-59
+EDADES_60a64,Ages 60-64,Edades de 60-64
+EDADES_65.,Ages 65+,Mayores de 65 Años
+URBANA,Urban Population,Población Urbana
+RURAL,Rural Population,Población Rural
+POBTOT_ge,,
+GEIND,Indigenous Population,Población Indigena
+GENOIND,Non-indigenous Population,Población no indígena
+PEMAYA,Maya Count,Conteo de Maya
+PEXINKA,Xinka Count,Conteo de Xinka
+PEGARIFUNA,Garifuna Count,Conteo de Garifuna
+PELADINA,Ladina Count,Conteo de Ladina
+PEOTRA,Other Count,Conteo de Otra
+TOTAL,,
+MAYA,First Language: Maya,Primer Idioma: Maya
+XINKA,First Language: Xinka,Primer Idioma: Xinka
+GARIFUNA,First Language: Garifuna,Primer Idioma: Garifuna
+ESPANOL,First Language: Spanish,Primer Idioma: Español
+OTRO,First Language: Other,Primer Idioma: Otra
+PercentMaya,Percent Maya,Porcentaje de Maya
+geom,,

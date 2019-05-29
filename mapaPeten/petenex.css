@@ -1,0 +1,23 @@
+.title {
+  color: #00b3b3;
+  text-align: center;
+}
+
+.map_container {
+  margin: 0 0 5em 0;
+}
+
+.selection_box {
+  /* padding: 1em 1em 1em 1em; */
+}
+
+.text_box {
+  background-color: #AAD3DF;
+  border-radius: 5px;
+  padding: 2em;
+}
+
+.hrule {
+  border-bottom: 1px solid black;
+  margin: 1em 0 1em 0;
+}

@@ -1,0 +1,3 @@
+language,introduction,mode,widget_mode,widget_set_choice,widget_tooltips,widget_spec_var
+English,Welcome to the El Petén Data Exploration App of the 2002 INE Census. ,1. Simple;2. Multiple attributes;,Mode,Choose a grouping,Tooltips,Choose a feature
+Español,Bienvenido a la aplicación de exploración de datos El Petén del Censo INE 2002.,1. Sencillo;2. Atributos multiples;,Manera,Elige un conjunto,Información sobre Herramientas,Elige una característica

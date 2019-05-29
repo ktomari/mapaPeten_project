@@ -68,7 +68,6 @@ rm(gov_ge_meta, gov_pop_meta)
 
 ```{r}
 read.dbf("data_official/descriptores/descriptor_PEA_rama_actividad.dbf")
-
 ```
 
 ```{r}
@@ -76,7 +75,7 @@ read_xls("data_official/INE_CENSO_2002_LUGAR_POBLADO/ESTADO_CIVIL.xls")
 ```
 
 
-# Census Places
+# Census Places: Locations
 
 ```{r}
 gov_lp <- st_read("data_official/lugares_poblados_gtm/lugares_poblados_gtm.shp")
@@ -100,7 +99,7 @@ gov_lp <- gov_lp %>%
 
 ```{r}
 # fix typos in categoria
-fn_typos <- function(y){
+fn_cat_typos <- function(y){
   sapply(y, function(x){
     if(x == "PAERCELAMIENT") return("PARCELAMIENTO")
     else if(x == "FIINCA") return("FINCA")
@@ -112,22 +111,27 @@ fn_typos <- function(y){
 # make categoria a char & fix typos
 gov_lp <- gov_lp %>%
   mutate(categoria = as.character(categoria)) %>%
-  mutate(categoria = fn_typos(categoria))
+  mutate(categoria = fn_cat_typos(categoria))
 
 gov_lp <- gov_lp %>%
   mutate(lugar_pobl = as.character(lugar_pobl))
 ```
 
+```{r}
+rm(fn_cat_typos)
+```
+
+
 ---
 
-# Census Data
+# Census Data: Population Attributes
 
 ```{r}
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # Data: POB_TOTAL_EDAD.xls
 # Note: "data_official/POB_TOTAL_EDAD.xls" is identical
 gov_pop <- read_xls("data_official/INE_CENSO_2002_LUGAR_POBLADO/POB_TOTAL_EDAD.xls")
-# glimpse(gov_pop)
+glimpse(gov_pop)
 ```
 
 ## Subset Peten
@@ -154,32 +158,39 @@ gov_pop <- gov_pop %>%
                              MUNICIPIO == "LALIBERTAD",
                              "LA LIBERTAD"))
 
+# census code should be a character.
 gov_pop <- gov_pop %>%
   mutate(COD_CENSO = as.character(COD_CENSO))
 
-# fix group names
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# fix age group names
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# first create groups
 grupos <- c(
-  "0-4",
-  "5-9",
-  "10-14",
-  "15-19",
-  "20-24",
-  "25-29",
-  "30-34",
-  "35-39",
-  "40-44",
-  "45-49",
-  "50-54",
-  "55-59",
-  "60-64",
+  "0a4",
+  "5a9",
+  "10a14",
+  "15a19",
+  "20a24",
+  "25a29",
+  "30a34",
+  "35a39",
+  "40a44",
+  "45a49",
+  "50a54",
+  "55a59",
+  "60a64",
   "65+"
 )
 
+# obtain column names
 pop_names <- names(gov_pop)
+
+# rename columns
 for(i in seq_along(pop_names)){
   nm <- pop_names[i]
   if(str_detect(nm, "GRUPO")){
-    nm <- str_replace(nm, "GRUPO", "AGE_")
+    nm <- str_replace(nm, "GRUPO", "EDADES_")
     group <- grupos[as.numeric(str_extract(nm, "\\d{1,}"))]
     nm <- str_replace(nm, "\\d{1,}", group)
     pop_names[i] <- nm
@@ -187,10 +198,15 @@ for(i in seq_along(pop_names)){
 }
 names(gov_pop) <- pop_names
 rm(i, nm, pop_names, group, grupos)
-
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # remove zero pop data.
 gov_pop <- gov_pop %>%
   filter(POBTOT > 0 | !is.na(POBTOT))
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# rename POBTOT to POBTOT_pop to specify this column comes from here.
+gov_pop <- gov_pop %>%
+  rename(POBTOT_pop = POBTOT)
 
 # error checking
 if(length(unique(gov_pop$MUNICIPIO))!=num_municipios) stop()
@@ -200,15 +216,22 @@ if(length(unique(gov_pop$MUNICIPIO))!=num_municipios) stop()
 
 ```{r}
 gov_pop <- gov_pop %>%
-  select(COD_CENSO, POBTOT, contains("AGE"), URBANA, RURAL)
+  select(COD_CENSO,
+         POBTOT_pop,
+         HOMBRES,
+         MUJERES,
+         contains("EDADES"),
+         URBANA,
+         RURAL)
 ```
 
 ---
 
-# Ethnic Groups
+# Census Data: Ethnic Groups
 
 ```{r}
-gov_ge <- read_xls("/Users/ken/Documents/UC Davis Documents/Research/acdip_map_population_project/data_official/INE_CENSO_2002_LUGAR_POBLADO/GRUPO_ETNICO.xls")
+gov_ge <- 
+  read_xls("data_official/INE_CENSO_2002_LUGAR_POBLADO/GRUPO_ETNICO.xls")
 glimpse(gov_ge)
 ```
 
@@ -259,6 +282,11 @@ gov_ge <- gov_ge %>%
 gov_ge <- gov_ge %>%
   mutate(COD_CENSO = as.character(COD_CENSO))
 
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# rename POBTOT to POBTOT_ge
+gov_ge <- gov_ge %>%
+  rename(POBTOT_ge = POBTOT)
+
 # error checking
 if(length(unique(gov_ge$MUNICIPIO))!=num_municipios) stop()
 ```
@@ -268,18 +296,17 @@ if(length(unique(gov_ge$MUNICIPIO))!=num_municipios) stop()
 ```{r}
 gov_ge <- gov_ge %>%
   select(COD_CENSO,  # unique ID
-         POBTOT,  # total population (differs from TOTAL)
+         POBTOT_ge,  # total population (differs from TOTAL)
          GEIND, GENOIND,  # count of indigenous/non-indigenous
          contains("PE"),  # ethnicities
          TOTAL, MAYA, XINKA, GARIFUNA, ESPANOL, OTRO)  # languages
 ```
 
-
 # Joining Census Places & Census Data
 
 ## Are Duplicate Rows Present?
 
-```{r}
+```{r eval=F}
 # census places data
 gov_lp %>%
   group_by(cod_censo) %>%
@@ -287,7 +314,7 @@ gov_lp %>%
   arrange(cod_censo)
 ```
 
-```{r}
+```{r eval=F}
 # population data
 gov_pop %>%
   group_by(COD_CENSO) %>%
@@ -295,7 +322,7 @@ gov_pop %>%
   arrange(COD_CENSO)
 ```
 
-```{r}
+```{r eval=F}
 # ethnic group data
 gov_ge %>%
   group_by(COD_CENSO) %>%
@@ -325,11 +352,6 @@ gov_ge2 <- gov_ge %>%
   ungroup()
 ```
 
-```{r}
-gov_ge2
-```
-
-
 ## Left Join Pop/Ethnicities to Census Places
 
 ```{r}
@@ -343,8 +365,6 @@ gov_lp2 <- gov_lp2 %>%
 # No pop data
 # gov_lp2 %>%
 #   filter(POBTOT.x == 0)
-
-# gov_lp2
 ```
 
 ### Explore Join Results
@@ -352,20 +372,24 @@ gov_lp2 <- gov_lp2 %>%
 ```{r eval=F}
 # Why are are POBTOTs not equal?
 gov_lp2 %>%
-  mutate(pop_comparison= ifelse(POBTOT.x==POBTOT.y, T, F)) %>%
+  mutate(pop_comparison= ifelse(POBTOT.x==POBTOT_ge, T, F)) %>%
   filter(pop_comparison==F)
 # it appears two rows are not equal; so lets keep both.
 
 gov_lp2 %>%
-  filter(is.na(POBTOT.y))
-# great no NA values for POBTOT.y
+  filter(is.na(POBTOT_ge))
+# great no NA values for POBTOT_ge
+```
+
+```{r}
+glimpse(gov_lp2)
 ```
 
 ## Create a Percentage Maya Column
 
 ```{r}
 gov_lp2 <- gov_lp2 %>%
-  mutate(PercentMaya = PEMAYA/POBTOT.y)
+  mutate(PercentMaya = PEMAYA/POBTOT_ge)
 ```
 
 # Determining Important `categoria`
@@ -380,17 +404,17 @@ A further consideration is that this is a test run for interpolating values for 
 
 Below is a summary table with some of the key factors.
 
-```{r}
+```{r eval=F}
 gov_lp2 %>%
   st_set_geometry(NULL) %>%
   group_by(categoria) %>%
   summarize(
     total_maya = sum(PEMAYA, na.rm=T),
-    total_pop = sum(POBTOT.y, na.rm=T),
-    percent_maya = sum(PEMAYA, na.rm=T)/sum(POBTOT.y, na.rm=T), 
+    total_pop = sum(POBTOT_ge, na.rm=T),
+    percent_maya = sum(PEMAYA, na.rm=T)/sum(POBTOT_ge, na.rm=T), 
     n=n(),
-    popped = length(POBTOT.y[POBTOT.y>0]), # pt with pop data
-    no_pop = length(POBTOT.y[POBTOT.y==0]),  # pt with no population data.
+    popped = length(POBTOT_ge[POBTOT_ge>0]), # pt with pop data
+    no_pop = length(POBTOT_ge[POBTOT_ge==0]),  # pt with no population data.
     no_pop_percent = no_pop/n
   ) %>%
   arrange(no_pop_percent) %>%
@@ -400,7 +424,7 @@ gov_lp2 %>%
 ## Create Subsetted Datasets based on `categoria`
 
 ```{r}
-# Inclusive: minus empty categories.
+# Inclusive: minus empty (of Mayan) categories.
 gov_lp_inclusive <- gov_lp2 %>%
   filter(!(categoria %in% c("BARRIO", "HACIENDA", "PARCELA", "PARQUE NATURA")))
 ```
@@ -436,7 +460,7 @@ ggplot() +
 
 ```{r eval=F}
 tmp <- gov_lp_inclusive %>%
-  filter(POBTOT.y > 0)
+  filter(POBTOT_ge > 0)
 png(filename="quick_map_pop_points_cleaned.png",
     width=1000,
     height=1000)

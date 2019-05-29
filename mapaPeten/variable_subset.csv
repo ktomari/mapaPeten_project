@@ -1,0 +1,8 @@
+subset,English,Español,variables,sub_variables,other_variables
+gender,gender,género,NA,NA,POBTOT_pop;HOMBRES;MUJERES;
+age,age,años,EDADES_0a4;EDADES_5a9;EDADES_10a14;EDADES_15a19;EDADES_20a24;EDADES_25a29;EDADES_30a34;EDADES_35a39;EDADES_40a44;EDADES_45a49;EDADES_50a54;EDADES_55a59;EDADES_60a64;EDADES_65.;,NA,POBTOT_pop
+type,village type,tipo de pueblo,NA,categoria,POBTOT_pop
+ethnicity,ethnicity,etnicidad,PEMAYA;PEXINKA;PEGARIFUNA;PELADINA;PEOTRA,NA,POBTOT_pop
+language,language,idioma,MAYA;XINKA;GARIFUNA;ESPANOL;OTRO;,NA,POBTOT_pop
+indigeneity,indigenous,indígena,NA,NA,POBTOT_pop
+maya,percent maya,porcentaje de maya,NA,NA,PercentMaya
